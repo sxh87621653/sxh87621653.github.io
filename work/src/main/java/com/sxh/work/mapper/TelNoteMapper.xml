@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.sxh.work.mapper.TelNoteDao">
+    <resultMap type="com.sxh.work.entity.TelNote" id="TelNote">
+        <id column="noteId" property="noteId"/>
+        <result column="sendName"  property="sendName"/>
+        <result column="requestName"  property="requestName"/>
+        <result column="sendTel"  property="sendTel"/>
+        <result column="requestTel"  property="requestTel"/>
+    </resultMap>
+    <insert id="create" keyProperty="noteId" useGeneratedKeys="true" parameterType="com.sxh.work.entity.TelNote">
+		insert into telnote(
+			sendName,
+			requestName,
+			sendTel,
+			requestTel
+		)values(
+			#{sendName},
+			#{requestName},
+			#{sendTel},
+			#{requestTel}
+		)
+	</insert>
+
+	<select id="findAll" resultMap="TelNote">
+        select * from telnote
+    </select>
+
+</mapper>

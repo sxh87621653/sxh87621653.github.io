@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.sxh.work.mapper.AccountDao">
+    <resultMap type="com.sxh.work.entity.Account" id="Account">
+        <id column="userId" property="userId"/>
+        <result column="userName"  property="userName"/>
+        <result column="userTel"  property="userTel"/>
+        <result column="pic" property="pic"></result></resultMap>
+    <select id="findAll" resultMap="Account">
+        select * from account
+    </select>
+    <select id="findByNameAndTel" resultMap="Account">
+		select * from account where userName = #{userName} and userTel=#{userTel}
+	</select>
+    <select id="findById" resultMap="Account">
+		select * from account where userId=#{userId}
+	</select>
+    <update id="updatePic">update account set pic =#{pic} where userId =#{userId}</update></mapper>
