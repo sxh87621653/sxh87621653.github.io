@@ -151,7 +151,7 @@ Navbar.vue
 
 
 
-EditePWD
+EditPWD.vue
 
 
 <template>
