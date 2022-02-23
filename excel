@@ -1,0 +1,182 @@
+npm install vue-json-excel
+
+
+
+send.vue
+
+
+<template>
+    <div>
+        <r-query-form :form="form" :items="items" @search="search"></r-query-form>
+        <div class="btn-panel">
+            <el-button size="small" type="primary" icon="el-icon-plus" @click="detail" >详情</el-button>
+            <el-button size="small" type="danger" icon="el-icon-delete" @click="del">删除</el-button>
+            <download-excel
+                    style="float: right;"
+                    :data = "json_data"
+                    :fields = "json_fields"
+                    name = "简历信息.xls">
+                <!-- 上面可以自定义自己的样式，还可以引用其他组件button -->
+                <el-button type="primary" size="small" @click="excel">导出EXCEL</el-button>
+            </download-excel>
+        </div>
+        <r-table ref="multipleTable" :tableData="tableData" :tableCols="tableCols">
+            <template slot="slot_post" slot-scope="scope">
+                {{scope.data.post.name}}
+            </template>
+            <template slot="slot_company" slot-scope="scope">
+                {{scope.data.company.name}}
+            </template>
+            <template slot="slot_student" slot-scope="scope">
+                {{scope.data.student.name}}
+            </template>
+            <template slot="slot_resume" slot-scope="scope">
+                {{scope.data.resume.name}}
+            </template>
+            <template slot="slot_status" slot-scope="scope">
+                <!--0待查看|1已查看|2有意向|3不合适-->
+                <el-tag v-if="scope.data.status == 0">待查看</el-tag>
+                <el-tag v-if="scope.data.status == 1">已查看</el-tag>
+                <el-tag v-if="scope.data.status == 2">有意向</el-tag>
+                <el-tag v-if="scope.data.status == 3">不合适</el-tag>
+            </template>
+        </r-table>
+        <r-pagination :page="page" :total="total" @handleCurrentChange="handleCurrentChange"></r-pagination>
+        <detailSend v-if="detailSend.visible" :param="detailSend"></detailSend>
+    </div>
+
+</template>
+
+<script>
+    import {query} from "@/api/send";
+    import {message} from "@/utils/message";
+    import {del} from '@/api/send'
+    import RTable from "@/components/RTable";
+    import RPagination from "@/components/RPagination";
+    import RQueryForm from "@/components/RQueryForm";
+    import detailSend from "./DetailSend"
+    import {DetailSend} from "@/api/send";
+    import JsonExcel from "vue-json-excel"
+
+    export default {
+        name: "Send",
+        components:{detailSend,RQueryForm, RPagination,RTable,DownloadExcel: JsonExcel,},
+        data(){
+            return{
+                total:0,
+                page:1,
+                tableData:[],
+                json_data:[],
+                tableCols:[
+                    {prop:'id', label:'ID', width:80},
+                    {prop:'postId', label:'职位',slot:'slot_post'},
+                    {prop:'companyId', label:'公司',slot:'slot_company'},
+                    {prop:'studentId', label:'学生姓名',slot:'slot_student'},
+                    {prop:'resumeId', label:'简历名称',slot:'slot_resume'},
+                    {prop:'status', label:'状态',slot:'slot_status'},
+                    {prop:'sendDate', label:'投递日期'},
+                ],
+                form:{
+                    postId:'',
+                },
+                items:[
+                    {type:'text',label:'职位名称',name:'postId',placeholder:'按关键字查询'},
+                ],
+                detailSend:{
+                    visible:false,
+                    close:this.close,
+                    callback:this.search,
+                    form:null,
+                },
+                json_meta: [
+                    [
+                        {
+                            " key ": " charset ",
+                            " value ": " utf- 8 "
+                        }
+                    ]
+                ],
+                json_fields: {
+                    "名称":"resume.name",
+                    "姓名": "student.name",    //常规字段
+                    "联系电话": "student.phone", //支持嵌套属性
+                    "毕业院校": "student.college",
+                    "学历":"student.education",
+                    "求职状态": "resume.jobStatus",
+                    "职位": "post.name",
+                    "薪水":"post.salary",
+                    "自我描述":"resume.evaluate",
+                    "技能描述":"resume.skill",
+                },
+
+            }
+        },
+        mounted() {
+            this.list({})
+        },
+        methods:{
+            handleCurrentChange(val){
+                this.page = val;
+                let params = this.form;
+                params.page = this.page
+                this.list(params);
+            },
+            search(){
+                this.list(this.form);
+            },
+            close(){
+                this.detailSend.visible=false;
+            },
+            list(params){
+                query(params).then(res=>{
+                    this.tableData = res.data;
+                    this.total = res.total;
+                })
+            },
+            del(){
+                let selection = this.$refs['multipleTable'].selection;
+                if(selection.length>0){
+                    this.$confirm('确定要删除吗','删除提示').then(()=>{
+                        let arr = selection.map(item=>item.id);
+                        let ids = arr.join(',');
+                        del(ids).then(res=>{
+                            message.success(res.msg);
+                            this.search()
+                        })
+                    }).catch(()=>{})
+                }else{
+                    message.warning('请选择要删除的数据')
+                }
+            },
+            detail(){
+                let selection = this.$refs['multipleTable'].selection;
+                if(selection.length==1){
+                    let id = selection[0].id;
+                    DetailSend(id).then(res=>{
+                        this.detailSend.visible = true;
+                        this.detailSend.form = res.data[0];
+                        console.log(this.detailSend.form);
+                    })
+
+                }else{
+                    message.warning('请选择一条数据查看')
+                }
+           },
+            excel()
+            {
+                let selection = this.$refs['multipleTable'].selection;
+                if(selection>0)
+                {
+                    this.json_data=selection;
+                }else {
+                    message.warning('未选择数据导出');
+                }
+
+            }
+        }
+    }
+</script>
+
+<style scoped>
+
+</style>
