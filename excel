@@ -162,12 +162,13 @@ send.vue
                     message.warning('请选择一条数据查看')
                 }
            },
-            excel()
+           excel()
             {
                 let selection = this.$refs['multipleTable'].selection;
-                if(selection>0)
+                if(selection.length>0)
                 {
                     this.json_data=selection;
+                    message.success('数据已导出');
                 }else {
                     message.warning('未选择数据导出');
                 }
