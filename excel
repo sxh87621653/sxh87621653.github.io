@@ -168,7 +168,7 @@ send.vue
                 if(selection.length>0)
                 {
                     this.json_data=selection;
-                    message.success('数据已导出');
+                    message.success('数据已成功导出');
                 }else {
                     message.warning('未选择数据导出');
                 }
