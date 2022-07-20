@@ -1,0 +1,124 @@
+package com.sxh.work;
+
+import com.google.gson.Gson;
+import com.sxh.work.controller.UserController;
+import com.sxh.work.model.UserModel;
+import org.junit.After;
+import org.junit.Assert;
+import org.junit.Before;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.MediaType;
+import org.springframework.test.context.junit4.SpringRunner;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.RequestBuilder;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.util.Map;
+
+import static org.hamcrest.CoreMatchers.not;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+@SpringBootTest
+@RunWith(SpringRunner.class)
+public class WorkApplicationTests {
+
+
+    @Autowired
+    UserController userController;
+
+    private MockMvc mvc;
+
+    @Before
+    public void setUp() {
+        mvc = MockMvcBuilders.standaloneSetup(userController).build();
+        System.out.println("------------------------------------------------------");
+    }
+
+
+    @After
+    public void after() throws Exception {
+    }
+
+    //查
+    private String findName="sunxh";
+    @Test
+    public void testFindByNameController() throws Exception {
+        RequestBuilder request = get("/user/findByName")
+                .param("name",findName)
+                .contentType(MediaType.APPLICATION_JSON_VALUE);
+        String result = mvc.perform(request).andExpect(status().isOk()).andExpect(content().string(not("")))
+                .andExpect(content().string(not("[]"))).andReturn().getResponse().getContentAsString();
+        System.out.println(result);
+    }
+
+    //增
+    private int insertId=99;
+    private String insertName="yt";
+    private int insertSex=1;
+    @Test
+    public void testInsertControllerController() throws Exception {
+        UserModel userModel =new UserModel();
+        userModel.setId(insertId);
+        userModel.setName(insertName);
+        userModel.setSex(insertSex);
+        Gson gson=new Gson();
+        String requestBody=gson.toJson(userModel);
+        Map map = gson.fromJson(requestBody, Map.class);
+        String newRequestBody = gson.toJson(map);
+        RequestBuilder request = post("/user/insert")
+                .content(newRequestBody)
+                .contentType(MediaType.APPLICATION_JSON)
+                .accept(MediaType.APPLICATION_JSON);
+        String result = mvc.perform(request).andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        Assert.assertEquals(Integer.parseInt(result),1);
+        System.out.println(result);
+    }
+
+    //改
+    private int updateId=25;
+    private String updateName="yt1";
+    private int updateSex=0;
+    @Test
+    @Transactional
+    public void testUpdateController() throws Exception {
+        UserModel userModel =new UserModel();
+        userModel.setId(updateId);
+        userModel.setName(updateName);
+        userModel.setSex(updateSex);
+        Gson gson=new Gson();
+        String requestBody=gson.toJson(userModel);
+        Map map = gson.fromJson(requestBody, Map.class);
+        String newRequestBody = gson.toJson(map);
+        RequestBuilder request = post("/user/update")
+                .content(newRequestBody)
+                .contentType(MediaType.APPLICATION_JSON)
+                .accept(MediaType.APPLICATION_JSON);
+        String result = mvc.perform(request).andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        Assert.assertEquals(Integer.parseInt(result),1);
+        System.out.println(result);
+    }
+
+    //删
+    private String deleteId="25";
+    @Test
+    @Transactional
+    public void testDeleteByIdController() throws Exception {
+        RequestBuilder request = get("/user/deleteById")
+                .param("id",deleteId)
+                .contentType(MediaType.APPLICATION_JSON_VALUE);
+        String result = mvc.perform(request).andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        Assert.assertEquals(Integer.parseInt(result),1);
+        System.out.println(result);
+    }
+
+
+
+
+}
