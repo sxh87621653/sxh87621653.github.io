@@ -1,0 +1,742 @@
+from gevent import monkey
+from gevent.pywsgi import WSGIServer
+# 下面这句不加也能启动服务，但是你会发现Flask还是单线程，在一个请求未返回时，其他请求也会阻塞，所以请添加这句
+monkey.patch_all()
+from werkzeug.utils import secure_filename
+import os
+
+import shutil
+path=r'D:\product/'
+
+import pymysql
+import datetime
+from flask import Flask,jsonify,request
+from flask_cors import CORS
+from flask_sqlalchemy import SQLAlchemy
+import time
+
+from datetime import timedelta
+
+pymysql.install_as_MySQLdb()
+
+
+app = Flask(__name__)
+CORS(app, resources=r'/*')
+# 这里默认的是get请求方式
+app.config['SQLALCHEMY_DATABASE_URI']='mysql+mysqlconnector://root:123456@localhost/python?charset=utf8'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS']=False
+
+
+
+
+db = SQLAlchemy(app)
+class product(db.Model):
+    __tablename__ = "product"
+    id = db.Column(db.Integer,primary_key=True)
+    product_name = db.Column(db.String(100))
+    defect_num=db.Column(db.Integer)
+    create_time=db.Column(db.String(100))
+    last_time=db.Column(db.String(100))
+    defect_id=db.Column(db.Integer)
+    user_name=db.Column(db.String(100))
+
+
+class defect(db.Model):
+    __tablename__ = "defect"
+    id = db.Column(db.Integer,primary_key=True)
+    defect_name = db.Column(db.String(100))
+    severity=db.Column(db.String(100))
+    control_limit=db.Column(db.String(100))
+    image=db.Column(db.String(100))
+    product_id=db.Column(db.Integer)
+    task_id = db.Column(db.Integer)
+
+
+class task(db.Model):
+    __tablename__ = "task"
+    id = db.Column(db.Integer, primary_key=True)
+    product_name = db.Column(db.String(100))
+    model=db.Column(db.Integer)
+    learn_rate = db.Column(db.String(100))
+    model_version=db.Column(db.String(100))
+    segmentation_rate = db.Column(db.String(100))
+    batch_size=db.Column(db.Integer)
+    epoch=db.Column(db.Integer)
+
+# 增加数据
+def insert_data(product_name, create_time,defect_num,defect_id, last_time,user_name):
+    create_time=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(create_time)
+    product_data=product(product_name="a1",defect_num=0,defect_id=1,create_time=create_time,
+                          last_time=create_time,user_name="a")
+    db.session.add(product_data)
+    db.session.commit()
+
+def defect_insert_data(defect_name, severity,control_limit,image,product_id,task_id):
+    defect_data=defect(defect_name=defect_name,severity=severity,product_id=product_id,task_id=task_id,control_limit=control_limit,image=image)
+    db.session.add(defect_data)
+    db.session.commit()
+
+def task_insert_data(product_name, model,model_version,learn_rate,segmentation_rate ,batch_size,epoch):
+    task_data=task(product_name=product_name,model=model,model_version=model_version,learn_rate=learn_rate, segmentation_rate=segmentation_rate,
+                          batch_size=batch_size,epoch=epoch)
+    db.session.add(task_data)
+    db.session.commit()
+
+
+# 修改rootDir路径下的文件夹名
+def replaceDirName(oldName,newName):
+    dirs = os.listdir(path)
+    for dir in dirs:
+        if(dir==oldName):
+            oldname = os.path.join(path, oldName)  # 老文件夹的名字
+            newname = os.path.join(path, newName)  # 新文件夹的名字
+            os.rename(oldname, newname)  # 替换
+            return True
+
+
+# 查询所有
+def select_data_all(page,page_size):
+    product_list = []
+    products = product.query.order_by(product.id.asc()).paginate(page=page,per_page=page_size).items
+    # 类似于 select * from Books
+
+    for s in products:
+        dic = {}
+        dic['id'] = s.id
+        dic['product_name'] = s.product_name
+        dic['defect_num'] = s.defect_num
+        dic['create_time'] = s.create_time
+        dic['last_time'] = s.last_time
+        dic['user_name'] = s.user_name
+        product_list.append(dic)
+    return product_list
+
+def select_data_all_like_name(page,page_size,product_name):
+    product_list = []
+    products = product.query.filter(product.product_name.ilike('%{product_name}%'.format(product_name=product_name)))\
+        .order_by(product.id.asc()).paginate(page=page,per_page=page_size).items
+    # 类似于 select * from Books
+
+    for s in products:
+        dic = {}
+        dic['id'] = s.id
+        dic['product_name'] = s.product_name
+        dic['defect_num'] = s.defect_num
+        dic['create_time'] = s.create_time
+        dic['last_time'] = s.last_time
+        dic['user_name'] = s.user_name
+        product_list.append(dic)
+    return product_list
+
+def defect_select_data_all(product_id):
+    defect_list = []
+    defects = defect.query.all()
+    if not product_id==None:
+        defects = defect.query.filter(defect.product_id==product_id).all()
+    for s in defects:
+        dic = {}
+        dic['id'] = s.id
+        dic['defect_name'] = s.defect_name
+        dic['severity'] = s.severity
+        dic['control_limit'] = s.control_limit
+        dic['image'] = s.image
+        dic['product_id'] = s.product_id
+        dic['task_id'] = s.task_id
+        defect_list.append(dic)
+    return defect_list
+
+def task_select_data_all(page,page_size):
+    task_list = []
+    tasks = task.query.order_by(task.id.desc()).paginate(page=page,per_page=page_size).items
+    for s in tasks:
+        dic = {}
+        dic['id'] = s.id
+        dic['product_name'] = s.product_name
+        dic['model'] = s.model
+        dic['model_version'] = s.model_version
+        dic['learn_rate'] = s.learn_rate
+        dic['segmentation_rate'] = s.segmentation_rate
+        dic['batch_size'] = s.batch_size
+        dic['epoch'] = s.epoch
+        task_list.append(dic)
+    return task_list
+
+# 通过id查询
+def select_data_by_id(id):
+    product_find = product.query.get(id)
+    if not product_find:
+        return False
+    dic = {}
+    dic['id'] = product_find.id
+    dic['product_name'] = product_find.product_name
+    dic['defect_num'] = product_find.defect_num
+    dic['create_time'] = product_find.create_time
+    dic['last_time'] = product_find.last_time
+    dic['user_name'] = product_find.user_name
+    return dic
+
+def defect_select_data_by_id(id):
+    defect_find = defect.query.get(id)
+    if not defect_find:
+        return False
+    dic = {}
+    dic['id'] = defect_find.id
+    dic['defect_name'] = defect_find.defect_name
+    dic['severity'] = defect_find.severity
+    dic['control_limit'] = defect_find.control_limit
+    dic['image'] = defect_find.image
+    dic['product_id'] = defect_find.product_id
+    dic['task_id'] = defect_find.task_id
+    return dic
+
+
+def task_select_data_by_id(id):
+    task_find = task.query.get(id)
+    if not task_find:
+        return False
+
+    dic = {}
+    dic['id'] = task_find.id
+    dic['product_name'] = task_find.product_name
+    dic['model'] = task_find.model
+    dic['model_version'] = task_find.model_version
+    dic['learn_rate'] = task_find.learn_rate
+    dic['segmentation_rate'] = task_find.segmentation_rate
+    dic['batch_size'] = task_find.batch_size
+    dic['epoch'] = task_find.epoch
+    return dic
+
+# 通过id删除数据
+def delete_data(id):
+    # 类似于 select * from Books where id = id
+    delete_id = product.query.get(id)
+    if not delete_id:
+        return False
+    db.session.delete(delete_id)
+    db.session.commit()
+    # 提交操作到数据库
+
+def defect_delete_data(id):
+    # 类似于 select * from Books where id = id
+    delete_id = defect.query.get(id)
+    if not delete_id:
+        return False
+    db.session.delete(delete_id)
+    db.session.commit()
+    # 提交操作到数据库
+
+def task_delete_data(id):
+    # 类似于 select * from Books where id = id
+    task_id = task.query.get(id)
+    if not task_id:
+        return False
+    db.session.delete(task_id)
+    db.session.commit()
+    # 提交操作到数据库
+
+# 修改数据
+def update_data(id, product_name='',defect_num=0,create_time='', last_time='', user_name='',defect_id=0):
+    product_update = product.query.get(id)
+    if not product_name == '':
+        product_update.product_name = product_name
+    if not last_time == '':
+        product_update.last_time = datetime.datetime.strptime(last_time,"%Y-%m-%d %H:%M:%S")
+    if not create_time == '':
+        product_update.create_time = datetime.datetime.strptime(create_time, "%Y-%m-%d %H:%M:%S")
+    if not defect_num == 0:
+        product_update.defect_num = defect_num
+    if not user_name == '':
+        product_update.user_name = user_name
+    if not defect_id == 0:
+        product_update.defect_id = defect_id
+    db.session.commit()
+
+
+def defect_update_data(id,defect_name='',severity='',product_id=0,task_id=0,control_limit='',image=''):
+    defect_update = defect.query.get(id)
+    if not defect_name == '':
+        defect_update.defect_name = defect_name
+    if not severity == '':
+        defect_update.severity = severity
+    if not control_limit == '':
+        defect_update.control_limit = control_limit
+    if not image == '':
+        defect_update.image = image
+    if not product_id == 0:
+        defect_update.product_id = product_id
+    if not task_id == 0:
+        defect_update.task_id = task_id
+    db.session.commit()
+
+def task_update_data(id,product_name='',model=0,model_version='',learn_rate='',segmentation_rate='', batch_size=0,epoch=0):
+    task_update = task.query.get(id)
+    if not product_name == '' and product_name == None:
+        task_update.product_name = product_name
+    if not model == 0:
+        task_update.model = model
+    if not model_version == '' and model_version != None:
+        task_update.model_version = model_version
+    if not learn_rate == '' and learn_rate != None:
+        task_update.learn_rate = learn_rate
+    if not segmentation_rate == '':
+        task_update.segmentation_rate= segmentation_rate
+    if not batch_size == 0:
+        task_update.batch_size= batch_size
+    if not epoch == 0:
+        task_update.epoch= epoch
+    db.session.commit()
+
+def saveImg(img,BASEDIR):
+    date=str(int(time.time()))
+    # 时间戳作为文件名
+    img_path = BASEDIR + date + '.' + img.filename.split('.')[-1]
+    img.save(img_path)
+    photo_path = date + '.' + img.filename.split('.')[-1]
+    return photo_path
+
+
+
+@app.route("/test",methods=['POST'])
+def test():
+    response_object = {'code': '200'}
+    if request.method == 'POST':
+        post_data = request.get_json()
+        id=post_data.get('id')
+        defect_name=post_data.get('defect_name')
+        severity=post_data.get('severity')
+        control_limit = post_data.get('control_limit')
+        task_delete_data(id)
+
+    return response_object
+
+@app.route("/")
+def FaceLogin():
+ param= request.args.get('param')
+ if param=="1":
+     result=1
+     if result==1:
+       title="Hello World"
+       Result=jsonify({"code": "200", "msg": "操作成功", "data":[{"title":title}]})
+#这里面就是你想要返回给前端的值， 切记，这里只能返回字符串，如果是个json数据，你的通过json.dumps(你的json数据)
+       return Result
+     else:
+         Result = jsonify({"code": "500", "msg": "操作失败", "data": [{"param": param}]})
+         return Result
+ else:
+     Result = jsonify({"code": "500", "msg": "操作失败", "data": [{"param":param}]})
+     return Result
+
+@app.route("/show",methods=['POST'])
+def showAll():
+    getProducts= product.query.all()
+    rep=getProducts[0].product + " " + getProducts[1].product
+    Result=jsonify({"code": "200", "msg": "操作成功", "data":[{"title":rep}]})
+    return Result
+
+
+# 前端通过传参title、author、read_status增加书籍
+@app.route('/product_add', methods=['POST'])
+def add():
+    response_object = {'code': '200'}
+    if request.method == 'POST':
+        post_data = request.get_json()
+        print('调用add方传过来的参数是', post_data)
+        if post_data.get('product_name') == None:
+            response_object['message'] = '项目名称是必传参数!'
+            response_object["code"] = '500'
+            return response_object
+        if post_data.get('user_name') == None:
+            response_object['message'] = '用户是必传参数!'
+            response_object["code"] = '500'
+            return response_object
+        product_name = str(post_data.get('product_name')),
+        user_name = str(post_data.get('user_name')),
+        create_time = str(post_data.get('create_time')),
+        last_time = str(post_data.get('last_time')),
+        defect_id = 1,
+        defect_num = 0
+        insert_data(product_name=product_name[0], create_time=create_time[0], last_time=last_time[0],
+                    user_name=user_name[0], defect_id=defect_id, defect_num=defect_num)
+        isExists = os.path.exists(path + product_name[0])
+        if not isExists:
+            os.makedirs(path + product_name[0])
+            os.makedirs(path + product_name[0]+'/defect')
+            response_object['message'] = '添加成功!'
+        else:
+            response_object['message'] = '该项目名已被创建!'
+    return response_object
+
+#因为插入出现问题，所以插入死数据的同时执行更新操作
+@app.route('/product_updateForAdd', methods=['POST'])
+def update_for_add():
+    response_object = {'status': 'success'}
+    if request.method == 'POST':
+        post_data = request.get_json()
+        print('调用delete方传过来的参数是：', post_data)
+        product_list = select_data_all()
+        # # 拼接所有的id到列表
+        id_list = []
+        for i in range(len(product_list)):
+            id_list.append(product_list[i]['id'])
+
+        id = id_list[0]
+        for i in range(1, len(id_list)):
+            if id < id_list[i]:
+                id = id_list[i]
+        product_name = post_data.get('product_name'),
+        user_name = post_data.get('user_name'),
+        create_time = post_data.get('create_time'),
+        last_time = post_data.get('last_time'),
+        defect_id = 1,
+        defect_num = 0
+        update_data(id=id,product_name=product_name[0], create_time=create_time[0], last_time=last_time[0],
+                    user_name=user_name[0], defect_id=defect_id, defect_num=defect_num)
+        response_object['message'] = '添加成功!'
+    return response_object
+
+
+
+# 前端通过传id删除书籍
+@app.route('/product_delete', methods=['POST'])
+def delete():
+    response_object = {'status': 'success'}
+    if request.method == 'POST':
+        post_data = request.get_json()
+        print('调用delete方传过来的参数是：', post_data)
+        if post_data.get('id') == None:
+            response_object['message'] = 'id是必传参数!'
+            response_object["status"] = 'fail'
+            return response_object
+        id = post_data.get('id')
+        product_detele=select_data_by_id(id)
+        name = os.path.join(path, product_detele.get('product_name'))
+        shutil.rmtree(name)
+        result = delete_data(id)  # 删除方法调用
+        if result == False:
+            response_object['message'] = '需要删除的项目不存在!'
+            response_object["status"] = 'fail'
+            return response_object
+        else:
+            response_object['message'] = '项目已被删除!'
+        return response_object
+
+
+# 前端通过传参title、author、read_status修改书籍
+@app.route('/product_update', methods=['POST'])
+def update():
+    response_object = {'status': 'success'}
+    if request.method == 'POST':
+        post_data = request.get_json()
+        print('调用update方传过来的参数是', post_data)
+        if post_data.get('id') == None:
+            response_object['message'] = 'id是必传参数!'
+            response_object["status"] = 'fail'
+            return response_object
+        if post_data.get('product_name') == None:
+            response_object['message'] = '项目名称是必传参数!'
+            response_object["status"] = 'fail'
+            return response_object
+        if post_data.get('user_name') ==  None:
+            response_object['message'] = '用户名是必传参数!'
+            response_object["status"] = 'fail'
+            return response_object
+        product_name = str(post_data.get('product_name')).strip(),
+        user_name = str(post_data.get('user_name')).strip(),
+        last_time = str(post_data.get('last_time')).strip(),
+        if post_data.get('defect_id')==None:
+            defect_id=0
+        else:
+            defect_id= post_data.get('defect_id').strip()
+
+        if product_name[0] == None or product_name[0] == '':
+            response_object['message'] = '项目名不能为空!'
+            response_object["status"] = 'fail'
+            return response_object
+        if user_name[0] == None or user_name[0] == '':
+            response_object['message'] = '用户名不能为空!'
+            response_object["status"] = 'fail'
+            return response_object
+
+        id = post_data.get('id')
+        product_name = post_data.get('product_name')
+        user_name = post_data.get('user_name')
+        defect_id = 0
+        defect_num = 0
+        product_update = select_data_by_id(id)
+        oldName = product_update.get('product_name')
+        update_data(id=id, product_name=product_name,create_time='',defect_num=defect_num, user_name=user_name,
+                    defect_id=defect_id,last_time=last_time[0])
+        if not product_name=='':
+            newName=product_name
+            isOk=replaceDirName(oldName, newName)
+        if isOk==True:
+            response_object['message'] = '已更新!'
+        else:
+            response_object['message'] = '更新失败!'
+        return response_object
+
+
+# 前端通过不传参默认查询所有书籍，传id查询对应书籍
+@app.route('/product_query', methods=['POST'])
+def query():
+    response_object = {'status': 'success'}
+    if request.method == 'POST':
+        post_data = request.get_json()
+        print('调用query方传过来的参数是', post_data)
+        product_name = str(post_data.get('product_name')).strip()
+        print(product_name)
+        if not product_name == '' or product_name == None:
+            products = select_data_all_like_name(page=post_data.get('page'), page_size=post_data.get('page_size'),
+                                                 product_name=product_name)
+            id_list = []
+            for i in range(len(products)):
+                id_list.append(products[i]['id'])
+            total = len(select_data_all_like_name(1, 10000000,product_name=product_name))
+            response_object['message'] = '查询所有项目成功!'
+            response_object['data'] = products
+            response_object['total'] = total
+            response_object['page'] = post_data.get('page')
+            return response_object
+
+        if post_data.get('id') == None:
+            products = select_data_all(page=post_data.get('page'),page_size=post_data.get('page_size'))
+            id_list = []
+            for i in range(len(products)):
+                id_list.append(products[i]['id'])
+            total = len(select_data_all(1, 10000000))
+            response_object['message'] = '查询所有项目成功!'
+            response_object['data'] = products
+            response_object['total'] = total
+            response_object['page'] = post_data.get('page')
+            return response_object
+        id = str(post_data.get('id')).strip()
+        if id == None or id == '':
+            response_object['message'] = 'id不能为空!'
+            response_object["status"] = 'fail'
+            return response_object
+        product = select_data_by_id(id)
+        if product== False:
+            response_object['message'] = '需要查询的项目不存在!'
+            response_object["status"] = 'fail'
+            return response_object
+        else:
+            response_object['message'] = '项目查询成功!'
+            response_object['data'] = product
+            return response_object
+
+
+@app.route('/task_add', methods=['POST'])
+def task_add():
+    response_object = {'code': '200'}
+    if request.method == 'POST':
+        post_data = request.get_json()
+        print('调用add方传过来的参数是', post_data)
+        if post_data.get('product_name') == None:
+            response_object['message'] = '项目名称是必传参数!'
+            response_object["code"] = '500'
+            return response_object
+        if post_data.get('model') == None:
+            response_object['message'] = 'model是必传参数!'
+            response_object["code"] = '500'
+            return response_object
+        if post_data.get('model_version') == None:
+            response_object['message'] = '版本号是必传参数!'
+            response_object["code"] = '500'
+            return response_object
+        product_name = str(post_data.get('product_name')),
+        model = post_data.get('model'),
+        model_version = str(post_data.get('model_version')),
+        learn_rate = post_data.get('learn_rate'),
+        segmentation_rate = post_data.get('segmentation_rate'),
+        batch_size = post_data.get('batch_size'),
+        epoch = post_data.get('epoch'),
+        task_insert_data(product_name=product_name[0], model=model[0], model_version=model_version[0], learn_rate=learn_rate[0],
+                         segmentation_rate=segmentation_rate[0], batch_size=batch_size[0], epoch=epoch[0])
+        response_object['message']='添加成功'
+    return response_object
+
+
+# 前端通过传id删除书籍
+@app.route('/task_delete', methods=['POST'])
+def task_delete():
+    response_object = {'status': 'success'}
+    if request.method == 'POST':
+        post_data = request.get_json()
+        print('调用delete方传过来的参数是：', post_data)
+        if post_data.get('id') == None:
+            response_object['message'] = 'id是必传参数!'
+            response_object["status"] = 'fail'
+            return response_object
+        id = post_data.get('id')
+        result = task_delete_data(id)  # 删除方法调用
+        if result == False:
+            response_object['message'] = '需要删除的项目不存在!'
+            response_object["status"] = 'fail'
+            return response_object
+        else:
+            response_object['message'] = '项目已被删除!'
+        return response_object
+
+
+@app.route('/task_update', methods=['POST'])
+def task_update():
+    response_object = {'status': 'success'}
+    if request.method == 'POST':
+        post_data = request.get_json()
+        print('调用update方传过来的参数是', post_data)
+        if post_data.get('id') == None:
+            response_object['message'] = 'id是必传参数!'
+            response_object["status"] = 'fail'
+            return response_object
+        if post_data.get('product_name') == None:
+            response_object['message'] = '项目名称是必传参数!'
+            response_object["status"] = 'fail'
+            return response_object
+        product_name = str(post_data.get('product_name')).strip(),
+        model = post_data.get('model'),
+        model_version = str(post_data.get('model_version')).strip(),
+        if product_name[0] == None or product_name[0] == '':
+            response_object['message'] = '项目名不能为空!'
+            response_object["status"] = 'fail'
+            return response_object
+        if model[0] == None or model[0] == 0:
+            response_object['message'] = 'model不能为空!'
+            response_object["status"] = 'fail'
+            return response_object
+        if model_version[0] == None or model_version[0] == '':
+            response_object['message'] = '版本不能为空!'
+            response_object["status"] = 'fail'
+            return response_object
+        id = post_data.get('id')
+        product_name = str(post_data.get('product_name')).strip(),
+        model = post_data.get('model'),
+        model_version = str(post_data.get('model_version')).strip(),
+        learn_rate = str(post_data.get('learn_rate')).strip(),
+        segmentation_rate = str(post_data.get('segmentation_rate')).strip(),
+        batch_size = post_data.get('batch_size'),
+        epoch = post_data.get('epoch'),
+        task_update_data(id=id, product_name=product_name[0],model=model[0],model_version=model_version[0],
+                         learn_rate=learn_rate[0],segmentation_rate=segmentation_rate[0],batch_size=batch_size[0],
+                         epoch=epoch[0])
+        response_object['message'] = '已更新!'
+
+        return response_object
+
+@app.route('/task_query', methods=['POST'])
+def task_query():
+    response_object = {'status': 'success'}
+    if request.method == 'POST':
+        post_data = request.get_json()
+        print('调用query方传过来的参数是', post_data)
+        if post_data.get('id') == None:
+            tasks = task_select_data_all(page=post_data.get('page'),page_size=post_data.get('page_size'))
+            total=len(task_select_data_all(1,10000000))
+            response_object['message'] = '查询所有项目成功!'
+            response_object['data'] = tasks
+            response_object['total'] = total
+            response_object['page'] = post_data.get('page')
+            return response_object
+        id = str(post_data.get('id')).strip()
+        if id == None or id == '':
+            response_object['message'] = 'id不能为空!'
+            response_object["status"] = 'fail'
+            return response_object
+        task = task_select_data_by_id(id)
+        if task== False:
+            response_object['message'] = '需要查询的项目不存在!'
+            response_object["status"] = 'fail'
+            return response_object
+        else:
+            response_object['message'] = '项目查询成功!'
+            response_object['data'] = task
+            return response_object
+
+@app.route('/defect_add', methods=['POST'])
+def defect_add():
+    response_object = {'code': '200'}
+    if request.method == 'POST':
+        post_data = request.get_json()
+        defect_name = str(post_data.get('defect_name')),
+        severity =str( post_data.get('severity')),
+        control_limit = str(post_data.get('control_limit')),
+        image = str(post_data.get('image')),
+        product_id = post_data.get('product_id'),
+        task_id = post_data.get('task_id'),
+        defect_insert_data(defect_name=defect_name[0], severity=severity[0], control_limit=control_limit[0], image=image[0],
+                         product_id=product_id[0], task_id=task_id[0])
+        response_object['message']='添加成功'
+    return response_object
+
+
+@app.route('/defect_delete', methods=['POST'])
+def defect_delete():
+    response_object = {'status': 'success'}
+    if request.method == 'POST':
+        post_data = request.get_json()
+        print('调用delete方传过来的参数是：', post_data)
+        if post_data.get('id') == None:
+            response_object['message'] = 'id是必传参数!'
+            response_object["status"] = 'fail'
+            return response_object
+        id = post_data.get('id')
+        result = defect_delete_data(id)  # 删除方法调用
+        if result == False:
+            response_object['message'] = '需要删除的项目不存在!'
+            response_object["status"] = 'fail'
+            return response_object
+        else:
+            response_object['message'] = '项目已被删除!'
+        return response_object
+
+@app.route('/defect_query', methods=['POST'])
+def defect_query():
+    response_object = {'status': 'success'}
+    if request.method == 'POST':
+        post_data = request.get_json()
+        print('调用query方传过来的参数是', post_data)
+
+        if post_data.get('id') == None:
+            defects = defect_select_data_all(post_data.get("product_id"))
+            total = len(task_select_data_all(post_data.get("product_id")))
+            response_object['message'] = '查询所有项目成功!'
+            response_object['data'] = defects
+            response_object['total'] = total
+            return response_object
+        id = str(post_data.get('id')).strip()
+        if id == None or id == '':
+            response_object['message'] = 'id不能为空!'
+            response_object["status"] = 'fail'
+            return response_object
+        defect = defect_select_data_by_id(id)
+        if defect== False:
+            response_object['message'] = '需要查询的项目不存在!'
+            response_object["status"] = 'fail'
+            return response_object
+        else:
+            response_object['message'] = '项目查询成功!'
+            response_object['data'] = defect
+            return response_object
+
+@app.route('/upload', methods={"POST"})  # 图片上传使用的方法都是使用post方法的
+#@login_required  # 需要登录之后才能上传照片
+def upload():
+    response_object = {'code': '200'}
+    if request.method == 'POST':
+        product_id = request.form.get('product_id')
+        img = request.files.get('file')
+        product_data=select_data_by_id(product_id)
+        product_name=product_data.get('product_name')
+        prevPath = os.path.join(path, product_name)
+        imgPath = prevPath + '/'
+        isOk = saveImg(img, imgPath)
+        if not isOk == '':
+            response_object['message'] = '上传成功'
+    return response_object
+
+if __name__ == '__main__':
+    # 这里host是你的后端地址，这里写0.0.0.0， 表示的是这个接口在任何服务器上都可以被访问的到，只需要前端访问该服务器地址就可以的，
+    # 当然你也可以写死，如222.222.222.222， 那么前端只能访问222.222.222.222, port是该接口的端口号,
+    # debug = True ,表示的是，调试模式，每次修改代码后不用重新启动服务
+    http_server = WSGIServer(('0.0.0.0',8888), app)
+    http_server.serve_forever()
