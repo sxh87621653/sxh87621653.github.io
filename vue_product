@@ -1,0 +1,235 @@
+<template>
+  <div class="dashboard-container">
+    <div class="dashboard-text">name: {{ name }}</div>
+    <el-row>
+      <el-col span="5" class="input_float_right">
+        <el-col span="20">
+          <el-input type="text" v-model="search"></el-input>
+        </el-col>
+        <el-col span="4">
+          <el-button @click="product_search()"><i class="el-icon-search"></i></el-button>
+        </el-col>
+      </el-col>
+    </el-row>
+    <el-row>
+      <el-table
+        :data="tableData"
+        height="600"
+        border
+        :header-cell-style="headClass"
+      >
+        <el-table-column
+          prop="id"
+          label="No."
+          width="80"
+          align="center">
+        </el-table-column>
+        <el-table-column
+          prop="product_name"
+          label="Product"
+          width="180"
+          align="center">
+        </el-table-column>
+        <el-table-column
+          label="Defect Num"
+          width="80"
+          align="center">
+          <template slot-scope="scope">
+            <div>{{this.defect_num(scope.row.id)}}</div>
+          </template>
+        </el-table-column>
+        <el-table-column
+          prop="defect_types"
+          label="Defect Types"
+          width="480"
+          align="center">
+          <el-table-column
+            prop="defect_name"
+            label="Defect Name"
+            width="160"
+            align="center">
+            <template slot-scope="scope">
+              <div v-for="(item,index) in defect_list" :key="index" :style="randomRgb(item)">
+                <div v-if="item.product_id === scope.row.id">
+                  <div>{{item.defect_name}}</div>
+                </div>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column
+            prop="severity"
+            label="Severity"
+            width="160"
+            align="center">
+            <template slot-scope="scope">
+              <div v-for="(item,index) in defect_list" :key="index" :style="randomRgb(item)">
+                <div v-if="item.product_id === scope.row.id">
+                <span>{{item.severity}}</span>
+                </div>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column
+            prop="control_limit"
+            label="ControlLimit"
+            width="160"
+            align="center">
+            <template slot-scope="scope">
+              <div v-for="(item,index) in defect_list" :key="index" :style="randomRgb(item)">
+                <div v-if="item.product_id === scope.row.id">
+                <div>{{item.control_limit}}</div>
+                </div>
+              </div>
+            </template>
+          </el-table-column>
+        </el-table-column>
+        <el-table-column
+          prop="model"
+          label="Models"
+          width="80"
+          align="center">
+          <el-button class="btn_border_none">> </el-button>
+        </el-table-column>
+        <el-table-column
+          prop="create_time"
+          label="Create Time"
+          width="180"
+          align="center">
+        </el-table-column>
+        <el-table-column
+          prop="last_time"
+          label="LastModifyTime"
+          width="180"
+          align="center">
+        </el-table-column>
+        <el-table-column
+          prop="user_name"
+          label="Operator"
+          width="180"
+          align="center">
+        </el-table-column>
+        <el-table-column
+          width="140"
+          align="center">
+          <el-button class="table_product_button_update">Update</el-button>
+          <el-button>delete</el-button>
+        </el-table-column>
+      </el-table>
+    </el-row>
+    <el-row class="center">
+      <el-pagination
+        background
+        :current-page="page"
+        :page-size="page_size"
+        layout="prev, pager, next,total"
+        :total="total"
+        @current-change="pager"
+      >
+      </el-pagination>
+    </el-row>
+  </div>
+</template>
+
+<script>
+import { mapGetters } from 'vuex'
+import {product_query,defect_query} from '@/api/python'
+import '@/assets/css/python.css'
+
+export default {
+  name: 'Dashboard',
+  computed: {
+    ...mapGetters([
+      'name'
+    ])
+  },
+  mounted() {
+    this.getProductList();
+    this.getDefectList();
+  },
+  data()
+  {
+    return{
+      text:"",
+      param:"1",
+      ifTrue:false,
+      page:1,
+      search:"",
+      page_size:5,
+      total:0,
+      index:{
+        page:1,
+        page_size:10,
+        product_name:"",
+        product_id:0
+      },
+      defect_list:[],
+      tableData:[]
+    }
+  },
+  methods:{
+    headClass()
+    {
+      return "background:#eef1f6;"
+    },
+    product_search()
+    {
+      this.index.product_name=this.search;
+      product_query(this.index).then(res=>
+      {
+        this.tableData=res.data.data;
+        this.total=res.data.total
+      })
+    },
+    defect_num(event)
+    {
+      this.index.product_id=event
+      defect_query(this.index).then(res=>{
+        console.log(res.data.total)
+        return re
+      })
+    },
+    randomRgb(item)
+    {
+      let R=Math.floor(Math.random()*130+110);
+      let G=Math.floor(Math.random()*130+110);
+      let B=Math.floor(Math.random()*130+110);
+      return {
+        background:'rgb('+R+','+G+','+B+')'
+      };
+    },
+    getProductList(){
+      this.index.page=this.page
+      this.index.page_size=this.page_size
+      product_query(this.index).then(res=>
+      {
+        this.tableData=res.data.data;
+        this.total=res.data.total
+      })
+    },
+    getDefectList()
+    {
+        defect_query(this.index).then(res=>{
+          this.defect_list=res.data.data;
+        })
+    },
+    pager(val){
+      this.page=val;
+      this.getProductList();
+    },
+  }
+
+
+}
+</script>
+
+<style lang="scss" scoped>
+.dashboard {
+  &-container {
+    margin: 30px;
+  }
+  &-text {
+    font-size: 30px;
+    line-height: 46px;
+  }
+}
+</style>
