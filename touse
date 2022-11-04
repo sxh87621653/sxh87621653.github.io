@@ -1,0 +1,895 @@
+# -*- coding: utf-8 -*-
+
+import os
+import cv2
+import numpy as np
+from numpy import pi, sin, cos
+import random
+import itertools
+import sys
+import copy
+import tempfile
+
+import csv
+import math
+from tqdm import tqdm
+from sklearn.metrics import auc
+from operator import itemgetter
+from scipy.optimize import leastsq
+
+import chainer
+from chainer import function
+from chainer import reporter as reporter_module
+from chainer.training import extensions
+from chainer.dataset import convert
+import chainer.functions as F
+from chainer import Variable
+from chainer.backends import cuda
+from snn.snn_common import snn_data
+from snn.snn_common.snn_message import Message
+from snn.snn_common.snn_web import snn_cipher
+from snn.snn_common.snn_file import Snn_Open
+
+np.set_printoptions(threshold=np.inf)
+msg = Message()
+
+
+##########################################################
+# 画像前処理系
+##########################################################
+
+class ResidualFunction:
+
+    def __init__(self, peak_info, quarter, y, x, fitting_area):
+
+        self.peak_info = peak_info
+        self.quarter = quarter
+        self.fitting_area = fitting_area
+        self.x = x
+        self.y = y
+
+    def __call__(self, p):
+
+        alpha = p[0]
+        delta1 = p[1]
+        delta2 = p[2]
+
+        return np.ravel(fitting_curve(alpha, delta1, delta2, self.peak_info,
+                                      self.quarter, self.y, self.x)
+                        - self.fitting_area)
+
+
+# 画像を取得し、cropできる最大正方形の辺長と
+# cropする際の正方形の左上の座標と右下の座標を返す
+def get_max_square(img):
+    pts = []
+    height = img.shape[0]
+    width = img.shape[1]
+    if height >= width:
+        sides = width
+    else:
+        sides = height
+
+    c_w = width / 2
+    c_h = height / 2
+    pts.append((int(c_w - sides / 2), int(c_h - sides / 2)))
+    pts.append((int(c_w + sides / 2), int(c_h + sides / 2)))
+
+    return pts
+
+
+# 画像を指定の座標でcropして返す
+def crop_center(img, pts):
+
+    im_crop = img[pts[0][1]:pts[1][1], pts[0][0]:pts[1][0]]
+
+    return im_crop
+
+
+def prep_chainertype(img, size):
+
+    img = cv2.resize(img, (size, size))
+    img = np.asarray(img)
+    img = np.transpose(img, (2, 0, 1))
+    img = img.astype(np.float32) / 255.
+
+    return img
+
+
+# フィッティングする二次曲線
+def fitting_curve(alpha, delta1, delta2, r, u, y, x):
+
+    ry, rx = r.shape
+    uy = u[0] * 2 + 1
+    ux = u[1] * 2 + 1
+
+    y = alpha / (ry * rx)\
+        * sin((y + delta1) * uy / ry * pi) * sin((x + delta2) * ux / rx * pi)\
+        / (sin((y + delta1) * pi / ry) * sin((x + delta2) * pi / rx))
+    return y
+
+
+# スペクトルのピークを取得する
+def get_peak(anchor, target):
+
+    # 窓関数で周波サンプリング範囲を固定
+    hanning_y = np.hanning(anchor.shape[0])
+    hanning_x = np.hanning(anchor.shape[1])
+    hanning_window = hanning_y.reshape(hanning_y.shape[0], 1) * hanning_x
+    anchor = anchor * hanning_window
+    target = target * hanning_window
+
+    # 2次元FFT　FFTしたものをさらにFFT
+    # 2次元FFTすると直流成分が配列の左上に集まる
+    anchor_fft2 = np.fft.fft2(anchor)
+    target_fft2 = np.fft.fft2(target)
+    # 複素数部分の符号を反転する
+    target_fft2_i = np.conj(target_fft2)
+    # 両者の積をとる
+    product = anchor_fft2 * target_fft2_i / np.abs(anchor_fft2 * target_fft2_i)
+
+    # ifftで逆フーリエ変換
+    # realで結果の実数部だけを取る
+    # 左上に集まった直流成分をfftshiftで中心に移動させる
+    peak = np.fft.fftshift(np.real(np.fft.ifft2(product)))
+
+    return peak
+
+
+# 位相限定相関法
+def exec_poc(anchor, target):
+
+    # 画像中心点を取得
+    center = [np.floor(anchor.shape[0]/2), np.floor(anchor.shape[1]/2)]
+    # 画像を四分割した際の中心点を取得
+    quarter = [center[0]/2, center[1]/2]
+
+    # スペクトルのピークを算出
+    peak_info = get_peak(anchor, target)
+    # ピーク値のある座標を取得
+    # argmaxは一次元時の座標を返すので二次元に変換
+    peak_idx_linear = np.argmax(peak_info)
+    peak_pts = (int(peak_idx_linear / anchor.shape[1]),
+                int(peak_idx_linear % anchor.shape[1]))
+
+    # ピーク周辺から取得する範囲を設定
+    fitting_shape = (9, 9)
+    mf = [np.floor(fitting_shape[0]/2), np.floor(fitting_shape[1]/2)]
+    # fitting_shape分だけピークの周辺を取得する
+    fitting_area = peak_info[peak_pts[0] - int(mf[0]):
+                             peak_pts[0] + int(mf[0]) + 1,
+                             peak_pts[1] - int(mf[1]):
+                             peak_pts[1] + int(mf[1]) + 1]
+    # 画像の中心とピーク点の差を算出
+    p0 = [0.5, -(peak_pts[0] - center[0]) - 0.02,
+          -(peak_pts[1] - center[1]) - 0.02]
+    # 格子作成
+    y, x = np.mgrid[-mf[0]:mf[0] + 1, -mf[1]:mf[1] + 1]
+    # 画像中心とピーク点の差分だけ格子を調整
+    y = y + peak_pts[0] - center[0]
+    x = x + peak_pts[1] - center[1]
+
+    # 最小二乗法用mapのラムダを定義
+    # 多分ズレ検知したやつを一次元配列化
+    res_func = ResidualFunction(peak_info, quarter, y, x, fitting_area)
+    plsq = leastsq(res_func, p0)
+
+    gap1 = plsq[0][1]
+    gap2 = plsq[0][2]
+
+    return gap1, gap2
+
+
+# ズレ補正
+# confは外側で[回転、拡縮、ズレ]のリストにして受け取る
+# mode:bothなら補正値算出+補正を実行、補正したtarget画像を返す
+# mode:correctなら補正のみ実行、補正したtarget画像を返す
+# mode:calcなら補正値算出のみ実行、補正に必要なパラメータの辞書を返す
+def correct_gap(anchor, target_path, size, conf, mode="both", param=None, key=None):
+
+    # confが全てFalse(何もしない指定)の場合は補正なしで返す
+    if conf[0] is False and conf[1] is False and conf[2] is False:
+        # calcモード時は空のparamを作成して返す
+        if mode == "calc":
+            param = dict()
+            return param
+        # bothモード、correctモード時はcropして返す
+        else:
+            target = cv2_imread(target_path, key=key)
+            pts = get_max_square(target)
+            target = crop_center(target, pts)
+            return target
+
+    # calc、bothモード時は補正値算出を実行
+    if mode == "calc" or mode == "both":
+        # targetはパスとして受け取っているのでグレスケで読込
+        # anchorは全て同じグレスケアンカーを使用するので外で読込
+        target = cv2_imread(target_path, flags=0, key=key)
+
+        # 係数算出の為に画像を正方形に
+        pts = get_max_square(anchor)
+        anchor = crop_center(anchor, pts)
+        anchor = cv2.resize(anchor, (size, size))
+        pts = get_max_square(target)
+        target = crop_center(target, pts)
+        target = cv2.resize(target, (size, size))
+
+        # フーリエ変換
+        anchor_f = np.fft.fft2(anchor)
+        anchor_fshift = np.fft.fftshift(anchor_f)
+        anchor_mag_spectrum = 20 * np.log(np.abs(anchor_fshift))
+        target_f = np.fft.fft2(target)
+        target_fshift = np.fft.fftshift(target_f)
+        target_mag_spectrum = 20 * np.log(np.abs(target_fshift))
+
+        # log_Polar変換
+        # スケーリング係数を算出
+        sides = anchor_mag_spectrum.shape[0]
+        scaling_coefficient = sides / math.log(sides)
+
+        anchor_lp = cv2.logPolar(anchor_mag_spectrum,
+                                 (sides / 2, sides / 2),
+                                 scaling_coefficient,
+                                 cv2.WARP_FILL_OUTLIERS+cv2.INTER_LINEAR)
+        target_lp = cv2.logPolar(target_mag_spectrum,
+                                 (sides / 2, sides / 2),
+                                 scaling_coefficient,
+                                 cv2.WARP_FILL_OUTLIERS+cv2.INTER_LINEAR)
+
+        # 位相限定相関法で回転角(中心角)とサイズ比を算出
+        rotate_info = exec_poc(anchor_lp, target_lp)
+        angle = -1 * rotate_info[0] / sides * 360
+        scale = 1.0 - rotate_info[1] / 100
+
+        # アフィン変換するための回転中心点座標を取得
+        center = tuple(np.array(anchor.shape) / 2)
+        # 回転角、サイズ比、中心点を元にしてアフィン変換の為の回転変換行列を取得
+        rot_matrix = cv2.getRotationMatrix2D(center, -1 * angle,
+                                             1.0 + (1.0 - scale))
+        # 取得した行列を使ってズレてる画像をアフィン変換、平行移動ズレのみになったものを作成
+        corrected_target = cv2.warpAffine(target, rot_matrix,
+                                          (target.shape[1], target.shape[0]),
+                                          flags=cv2.INTER_LANCZOS4)
+
+        # 回転とかを除いたものに対してｘｙ方向のズレ算出
+        gap = exec_poc(anchor, corrected_target)
+
+        # calcモード時は算出したangle, scale, gap、centerを辞書にして返して終了
+        if mode == "calc":
+            param = dict(angle=angle, scale=scale, gap_x=gap[1],
+                         gap_y=gap[0], center=center)
+            return param
+
+    # correct、bothモード時は補正処理を実行
+    if mode == "correct" or mode == "both":
+        # 返却用に画像をカラーで読込
+        target = cv2_imread(target_path, key=key)
+        pts = get_max_square(target)
+        target = crop_center(target, pts)
+        target = cv2.resize(target, (size, size))
+
+        # 各変数代入
+        # bothモード時は算出したgapから代入
+        if mode == "both":
+            gap_x = gap[1]
+            gap_y = gap[0]
+        # correctモード時は引数のparamから代入
+        elif mode == "correct":
+            angle = param["angle"]
+            scale = param["scale"]
+            gap_x = param["gap_x"]
+            gap_y = param["gap_y"]
+            center = param["center"]
+
+        # confの指定に合わせてdst_target作成
+        rot_flg = 0
+        trans_flg = 0
+        # 「回転のみ」の場合と「回転+ズレ」の場合
+        if conf[0] is True and conf[1] is False:
+            dst_rot = cv2.getRotationMatrix2D(center, -1 * angle, 1.0)
+            rot_flg = 1
+            # ズレ補正の指定があったら以下も実行
+            if conf[2] is True:
+                trans_matrix = np.float32([[1, 0, -1 * gap_x],
+                                           [0, 1, -1 * gap_y]])
+                trans_flg = 1
+
+        # 「拡縮のみ」の場合と「拡縮+ズレ」の場合
+        elif conf[0] is False and conf[1] is True:
+            dst_rot = cv2.getRotationMatrix2D(center, 0, 1.0 + (1.0 - scale))
+            rot_flg = 1
+            # ズレ補正の指定があったら以下も実行
+            if conf[2] is True:
+                trans_matrix = np.float32([[1, 0, -1 * gap_x],
+                                           [0, 1, -1 * gap_y]])
+                trans_flg = 1
+
+        # 「回転+拡縮」の場合と「回転+拡縮+ズレ」の場合
+        elif conf[0] is True and conf[1] is True:
+            dst_rot = cv2.getRotationMatrix2D(center, -1 * angle,
+                                              1.0 + (1.0 - scale))
+            rot_flg = 1
+            # ズレ補正の指定があったら以下も実行
+            if conf[2] is True:
+                trans_matrix = np.float32([[1, 0, -1 * gap_x],
+                                           [0, 1, -1 * gap_y]])
+                trans_flg = 1
+
+        # 「ズレのみ」の場合
+        elif conf[0] is False and conf[1] is False and conf[2] is True:
+            trans_matrix = np.float32([[1, 0, -1 * gap_x],
+                                       [0, 1, -1 * gap_y]])
+            trans_flg = 1
+
+        # rot_flgがゼロのままでなければ回転、拡縮補正実施
+        # trans_flgがゼロのままでなければズレ補正実施
+        dst_target = target
+        if rot_flg != 0:
+            dst_target = cv2.warpAffine(dst_target, dst_rot,
+                                        (target.shape[1], target.shape[0]),
+                                        flags=cv2.INTER_LANCZOS4)
+        if trans_flg != 0:
+            dst_target = cv2.warpAffine(dst_target, trans_matrix,
+                                        (target.shape[1], target.shape[0]))
+
+        return dst_target
+
+
+#####################################################
+# 結果算出系
+#####################################################
+# 受け取った特徴間の距離を算出
+def calc_dist(anchor, target, pooling=True):
+
+    # inの形状を取得
+    b_size, channels, rows, cols = anchor.data.shape
+    f_sum = F.sum(F.square(anchor - target), axis=1)
+    # inの形状に合わせる
+    dist = F.reshape(f_sum, (b_size, 1, rows, cols))
+    # 学習時のみpooling=True
+    if pooling:
+        dist = F.reshape(F.max_pooling_2d(dist, ksize=(rows, cols)), (b_size,))
+
+    return dist / channels
+
+
+def pred_scores(anchor, target, model):
+
+    f_anchor = model.predict(anchor)
+    f_target = model.predict(target)
+
+    dist = calc_dist(f_anchor, f_target, pooling=False).data
+
+    b_size, channel, cols, rows = dist.shape
+    dist = F.reshape(dist, (b_size, rows * cols)).data
+
+    return dist
+
+
+def calc_auc(test_score_list=None, label_images=None, times=10):
+
+    # 閾値変更回数timesはデフォルト10
+    # score_listからスコアデータの一辺長を取得
+    data_sides = int(math.sqrt(len(test_score_list[0])))
+
+    # 画像名格納用配列
+    idx_list = []
+    for i_n in range(len(label_images)):
+        # target_imageの枚数分、idx_listに番号を追加
+        idx_list.append(i_n)
+
+    # スコア格納用配列初期化
+    score_list = list(np.zeros((len(idx_list), data_sides)))
+
+    # 受け取ったtest_score_listを前から順に[画像数(スコア数)][行数]の形にする
+    row_cnt = 0
+    for idx in idx_list:
+        score_list[idx] = list(score_list[idx])
+        # スコアデータを各行毎の形に分解
+        while row_cnt < data_sides:
+            score_list[idx][row_cnt]\
+                = test_score_list[idx][row_cnt*data_sides:
+                                       (row_cnt+1)*data_sides]
+            row_cnt += 1
+        # カウンタ初期化
+        row_cnt = 0
+
+    total_tpr_list, total_fpr_list, _ = calc_auc_precore(idx_list,
+                                                         score_list,
+                                                         label_images,
+                                                         data_sides,
+                                                         times)
+
+    # 全体ROC, AUCの算出、描画
+    total_roc_auc = auc(np.array(total_fpr_list), np.array(total_tpr_list))
+
+    res_dict = {"auc": {total_roc_auc}}
+
+    return res_dict
+
+
+# 実際のcalc_auc処理
+def calc_auc_precore(idx_list, score_list, label_images, data_sides, times):
+
+    #####################################################
+    # リスト内スコア調査
+    #####################################################
+    # リスト内の全スコアの最高値を取得
+    score_max = 0
+    for i_n in range(len(score_list)):
+        for r_n in range(len(score_list[0])):
+            for scr in range(data_sides):
+                score = float(score_list[i_n][r_n][scr])
+                if score > score_max:
+                    score_max = score
+
+    # ROC用閾値を設定
+    thres_base = score_max / times
+
+    #####################################################
+    # 画像毎の処理
+    #####################################################
+
+    img_num = 0
+    individual_dict_list = []
+    # 全体精度評価用リスト初期化
+    total_dict = dict(total_tp=[0 for x in range(times+1)],
+                      total_fn=[0 for x in range(times+1)],
+                      total_fp=[0 for x in range(times+1)],
+                      total_tn=[0 for x in range(times+1)],
+                      total_acc=0,
+                      total_prc_p=0,
+                      total_prc_n=0,
+                      total_rec_p=0,
+                      total_rec_n=0)
+
+    # マスク画像とscore_listを順番に比較
+    for idx in idx_list:
+
+        individual_dict, total_dict = calc_auc_core(idx, score_list[img_num],
+                                                    label_images, data_sides,
+                                                    thres_base, times,
+                                                    total_dict)
+        # idx情報もリストのリストでセットにしておく
+        individual_dict_list.append([[idx], [individual_dict]])
+
+        # 全体の平均acc, prc, rec用変数に加算
+        total_dict["total_acc"] += individual_dict["acc"]
+        total_dict["total_prc_p"] += individual_dict["prc_p"]
+        total_dict["total_prc_n"] += individual_dict["prc_n"]
+        total_dict["total_rec_p"] += individual_dict["rec_p"]
+        total_dict["total_rec_n"] += individual_dict["rec_n"]
+
+        # img_numを更新
+        img_num += 1
+
+    # 全体の真陽性率、偽陽性率算出
+    total_tpr_list = []
+    total_fpr_list = []
+    for time in range(times+1):
+        if (total_dict["total_tp"][time] + total_dict["total_fn"][time]) == 0:
+            total_tpr = 0
+        else:
+            total_tpr = total_dict["total_tp"][time] / \
+                        (total_dict["total_tp"][time]
+                         + total_dict["total_fn"][time])
+        if (total_dict["total_fp"][time] + total_dict["total_tn"][time]) == 0:
+            total_fpr = 0
+        else:
+            total_fpr = total_dict["total_fp"][time] / \
+                        (total_dict["total_fp"][time]
+                         + total_dict["total_tn"][time])
+        total_tpr_list.append(total_tpr)
+        total_fpr_list.append(total_fpr)
+
+    return total_tpr_list, total_fpr_list, individual_dict_list
+
+
+def calc_auc_core(idx, scores, label_images, data_sides,
+                  thres_base, times, total_dict):
+
+    # 各変数を初期化
+    result_dict = dict(fpr_list=[],
+                       tpr_list=[],
+                       fnr_list=[],
+                       tnr_list=[],
+                       acc=0,
+                       prc_p=0,
+                       prc_n=0,
+                       rec_p=0,
+                       rec_n=0)
+
+    # 共通化
+    # idxには添え字が入っているためidx番目のmaskを読込
+    # np.ndarrayに変換しないとresizeが通らない
+    mask = cuda.to_cpu(label_images[int(idx)])
+
+    # mask画像をcrop
+    m_pts = get_max_square(mask)
+    mask = crop_center(mask, m_pts)
+    # mask画像のサイズをscore_listに合わせる
+    mask = cv2.resize(mask, (data_sides, data_sides))
+
+    #####################################################
+    # tp, fp, fn, tnカウント処理
+    #####################################################
+    # mask画像内の白以外の画素数をカウント
+    # mask画像の白でない画素数の二倍、score_listを調査する。
+    n_pix = 0
+    for row in range(data_sides):
+        for col in range(data_sides):
+            if mask[row][col][0] != 255 \
+                    or mask[row][col][1] != 255 \
+                    or mask[row][col][2] != 255:
+                        n_pix += 1
+
+    # mask画像の半分以上が異常箇所だった場合は数を調整
+    if n_pix > int(data_sides * data_sides / 2):
+        n_pix = int(data_sides * data_sides / 2)
+
+    # 位置を追加して二次元配列を一次元に変換
+    score_line = []
+    for row in range(data_sides):
+        for col in range(data_sides):
+            score_line.append([(row, col), float(scores[row][col])])
+
+    # スコアの降順に並べ替える
+    score_line = (sorted(score_line, key=itemgetter(1))[::-1])
+
+    # 前からn_pix*2だけ抽出
+    score_line = (score_line[:n_pix*2])
+
+    for time in range(times+1):
+        tp = 0  # 真陽
+        fn = 0  # 偽陰
+        fp = 0  # 偽陽
+        tn = 0  # 真陰
+        # 各回の閾値を設定
+        threshold = thres_base * time
+        for pts in range(len(score_line)):
+            row, col = score_line[pts][0]
+            # maskの該当画素が白かそれ以外かで判定
+            # 白(正常想定画素)の場合
+            if mask[row][col][0] == 255 \
+                and mask[row][col][1] == 255 \
+                    and mask[row][col][2] == 255:
+                    # scoresの該当画素がthreshold以下なら正常判定
+                    if float(scores[row][col]) <= threshold:
+                        # 真：正常、推：正常
+                        tp += 1  # 個別tp
+                        total_dict["total_tp"][time] += 1  # 全体tp
+                    else:
+                        # 真：正常、推：異常
+                        fn += 1  # 個別fn
+                        total_dict["total_fn"][time] += 1  # 全体fn
+            # maskが白以外(異常想定画素)の場合
+            else:
+                # scoresの該当画素がthresholdより大きければ異常判定
+                if float(scores[row][col]) > threshold:
+                    # 真：異常、推：異常
+                    tn += 1  # 個別tn
+                    total_dict["total_tn"][time] += 1  # 全体tn
+                else:
+                    # 真：異常、推：正常
+                    fp += 1  # 個別fp
+                    total_dict["total_fp"][time] += 1  # 全体fp
+
+        # 真陽性率算出
+        if (tp + fn) == 0:
+            tpr = 0
+        else:
+            tpr = tp / (tp + fn)
+        result_dict["tpr_list"].append(tpr)
+
+        # 偽陽性率算出
+        if (fp + tn) == 0:
+            fpr = 0
+        else:
+            fpr = fp / (fp + tn)
+        result_dict["fpr_list"].append(fpr)
+
+        # 真陰性率算出
+        if (tn + fp) == 0:
+            tnr = 0
+        else:
+            tnr = tn / (tn + fp)
+        result_dict["tnr_list"].append(tnr)
+
+        # 偽陰性率算出
+        if (fn + tp) == 0:
+            fnr = 0
+        else:
+            fnr = fn / (fn + tp)
+        result_dict["fnr_list"].append(fnr)
+
+        # Accuracy, Precision, Recallについては最高値のみ保存
+        # 正解率(Accuracy)算出
+        if (tp + fp + fn + tn) != 0:
+            tmp_acc = (tp + tn) / (tp + fp + fn + tn)
+        else:
+            tmp_acc = 0
+        if tmp_acc > result_dict["acc"]:
+            result_dict["acc"] = tmp_acc
+
+        # 正常画素についての適合率(Precision)算出
+        if (tp + fp) != 0:
+            tmp_prc_p = tp / (tp + fp)
+        else:
+            tmp_prc_p = 0
+        if tmp_prc_p > result_dict["prc_p"]:
+            result_dict["prc_p"] = tmp_prc_p
+
+        # 異常画素についての適合率(Precision)算出
+        if (tn + fn) != 0:
+            tmp_prc_n = tn / (tn + fn)
+        else:
+            tmp_prc_n = 0
+        if tmp_prc_n > result_dict["prc_n"]:
+            result_dict["prc_n"] = tmp_prc_n
+
+        # 正常画素についての再現率(Recall)算出
+        if (tp + fn) != 0:
+            tmp_rec_p = tp / (tp + fn)
+        else:
+            tmp_rec_p = 0
+        if tmp_rec_p > result_dict["rec_p"]:
+            result_dict["rec_p"] = tmp_rec_p
+
+        # 異常画素についての再現率(Recall)算出
+        if (tn + fp) != 0:
+            tmp_rec_n = tn / (tn + fp)
+        else:
+            tmp_rec_n = 0
+        if tmp_rec_n > result_dict["rec_n"]:
+            result_dict["rec_n"] = tmp_rec_n
+
+    return result_dict, total_dict
+
+
+def cv2_imread(filename, flags=cv2.IMREAD_COLOR, key=None):
+
+    if key is None:
+        # 引数keyなし：cv2.imreadで読む
+        return cv2.imread(filename, flags=flags)
+    else:
+
+        # 引数keyあり：画像のbytesオブジェクト取得
+        with Snn_Open(filename, 'rb', key=key) as f:
+            data = f.read()
+
+        with tempfile.NamedTemporaryFile() as f:
+            # bytesオブジェクトから一時ファイル生成
+            f.write(data)
+            f.flush()
+            # cv2.imreadで読む
+            opencv_img = cv2.imread(f.name, flags=flags)
+
+        return opencv_img
+
+##########################################################
+# 外観検査独自Evaluatorクラス
+##########################################################
+class VisualInspectionEvaluator(extensions.Evaluator):
+
+    default_name = "validation"
+
+    # コンストラクタ
+    # -- iterator
+    # -- target   : model
+    # -- mean
+    def __init__(self, iterator, target, converter=convert.concat_examples,
+                 device=None, eval_hook=None, eval_func=None):
+
+        super(VisualInspectionEvaluator, self).__init__(
+            iterator, target, converter, device, eval_hook, eval_func)
+
+    # 評価
+    def evaluate(self):
+
+        iterator = self._iterators['main']
+        target = self._targets['main']
+
+        if self.eval_hook:
+            self.eval_hook(self)
+
+        if hasattr(iterator, 'reset'):
+            iterator.reset()
+            it = iterator
+        else:
+            it = copy.copy(iterator)
+
+        summary = reporter_module.DictSummary()
+
+        for batch in it:
+            observation = {}
+            with reporter_module.report_scope(observation):
+                in_arrays = self.converter(batch, self.device)
+                with function.no_backprop_mode():
+
+                    # 以下、ミニバッチ分のデータセット
+                    anchor_image = in_arrays[0]
+                    target_image = in_arrays[1]
+                    label_image = in_arrays[2]
+
+                    # predict実行
+                    score_list = pred_scores(anchor_image,
+                                             target_image, target)
+
+                    # AUC計算
+                    # input
+                    # -- score_list   : ミニバッチ分のscore_list
+                    # -- target_image : ミニバッチ分の対象画像データ
+                    # -- label_image : ミニバッチ分のラベル画像データ
+                    # output
+                    # -- dict : { "auc" : 対象分のacuのlist}
+                    dict = calc_auc(score_list, label_image)
+
+                    auc_list = dict["auc"]
+                    auc_mean_batch = sum(auc_list)/len(auc_list)
+
+                    # ミニバッチ分のaucをsummaryにセット
+                    summary.add({VisualInspectionEvaluator.default_name
+                                 + '/main/auc': float(auc_mean_batch)})
+
+        # 平均値を最終結果として返却
+        return summary.compute_mean()
+
+
+##########################################################
+# データセット作成系
+##########################################################
+
+# 学習用データセット作成クラス
+class VisualInspectionTrainDataset(chainer.dataset.DatasetMixin):
+
+    def __init__(self, ok_root, ng_root, mean, size, correction):
+
+        # meanを元の形式に戻す
+        mean = np.transpose(mean, (1, 2, 0))
+        ok_list = os.listdir(ok_root)
+        ng_list = os.listdir(ng_root)
+        ok_images = []
+        ng_images = []
+        tri_images = []
+
+        # 画像までの相対パスを作成
+        for ok in ok_list:
+            ok_images.append(os.path.join(ok_root, ok))
+        for ng in ng_list:
+            ng_images.append(os.path.join(ng_root, ng))
+
+        # 進捗バー設定
+        length = int(len(ok_images) * (len(ok_images)-1) / 2 * len(ng_images))
+        pbar = tqdm(total=length, ascii='#', desc='preparing Training Dataset')
+
+        # ok二枚、ng一枚を組としてtripletセットを作成
+        for ok1, ok2 in itertools.combinations(ok_images, 2):
+            for ng in ng_images:
+                # ここでは補正値の算出のみを行い、実際に補正するのはget_example内
+                # calcモードで呼び出し
+                # ok1をanchorとしてグレスケ読込をして補正
+                anchor_ok1 = cv2_imread(ok1, flags=0)
+                cr_ok_param = correct_gap(anchor_ok1, ok2, size,
+                                          correction, "calc")
+                cr_ng_param = correct_gap(anchor_ok1, ng, size,
+                                          correction, "calc")
+                tri_images.append((ok1, ok2, ng, cr_ok_param, cr_ng_param))
+
+                # 進捗バー更新
+                pbar.update(1)
+        pbar.close()
+
+        self.base = tri_images
+        self.mean = mean
+        self.pts = get_max_square(mean)
+        self.size = size
+        self.correction = correction
+
+    def __len__(self):
+        return len(self.base)
+
+    def get_example(self, i):
+
+        # anchorのchainer形式変換のみ最後
+        img_a = cv2_imread(self.base[i][0])
+        img_a = crop_center(img_a, self.pts)
+        img_a = prep_chainertype(img_a - self.mean, self.size)
+
+        # 算出済みの補正値を使って補正、読込とcropは関数内
+        # correctモードでanchorは不要なのでNoneを送る
+        img_p = correct_gap(None, self.base[i][1], self.size,
+                            self.correction, "correct", self.base[i][3])
+        img_p = prep_chainertype(img_p - self.mean, self.size)
+
+        # 算出済みの補正値を使って補正、読込とcropは関数内
+        # correctモードでanchorは不要なのでNoneを送る
+        img_n = correct_gap(None, self.base[i][2], self.size,
+                            self.correction, "correct", self.base[i][4])
+        img_n = prep_chainertype(img_n - self.mean, self.size)
+
+        return img_a, img_p, img_n
+
+
+# 外観検査評価用データセット作成クラス
+class VisualInspectionTestDataset(chainer.dataset.DatasetMixin):
+
+    def __init__(self, meta_data, path_in, mean, size, correction):
+
+        # 復号化用のキーを取得
+        self.key = snn_cipher.get_dataset_key(
+            meta_data['company_id'], meta_data['dataset_id'])
+
+        # meanを元の形式に戻す
+        mean = np.transpose(mean, (1, 2, 0))
+
+        anchor_path = os.path.join(path_in, "anchor")
+        target_path = os.path.join(path_in, "target")
+        label_path = os.path.join(path_in, "mask")
+
+        if os.path.exists(anchor_path):
+            anchor_path_list = os.listdir(anchor_path)
+            if len(anchor_path_list) != 1:
+                msg.print_message('EMDL05_4002', [anchor_path])
+        else:
+            msg.print_message('EMDL05_4001', [path_in, '検証用基準画像フォルダ', 'anchor'])
+        if os.path.exists(target_path):
+            target_path_list = os.listdir(target_path)
+        else:
+            msg.print_message('EMDL05_4001', [path_in, '検証用画像フォルダ', 'target'])
+        if not os.path.exists(label_path):
+            msg.print_message('EMDL05_4001', [path_in, '検証用マスク画像フォルダ', 'mask'])
+
+        # 最大正方形サイズを取得
+        pts = get_max_square(mean)
+
+        anchor_image_path = os.path.join(anchor_path, anchor_path_list[0])
+
+        target_images = []
+        label_images = []
+        params = []
+
+        # ズレ補正の為にanchorのみグレスケ読込
+        anchor = cv2_imread(anchor_image_path, flags=0, key=self.key)
+        for target in target_path_list:
+            # targetとlabelはリストにそのまま格納
+            target_image_path = os.path.join(target_path, target)
+            target_images.append(target_image_path)
+            label_images.append(os.path.join(label_path, "mask_"+target))
+            # correct_gapで補正値を算出してparamsに格納
+            params.append(correct_gap(anchor, target_image_path, size,
+                                      correction, "calc", key=self.key))
+
+        self.anchor = anchor_image_path
+        self.target = target_images
+        self.label = label_images
+        self.params = params
+        self.mean = mean
+        self.pts = pts
+        self.size = size
+        self.correction = correction
+
+    def __len__(self):
+        return len(self.target)
+
+    def get_example(self, i):
+
+        anchor_image = cv2_imread(self.anchor, key=self.key)
+        anchor_image = crop_center(anchor_image, self.pts)
+        anchor_image = cv2.resize(anchor_image, (self.size, self.size))
+        anchor_image = prep_chainertype(anchor_image - self.mean, self.size)
+
+        # 算出済みの補正値を使って補正、読込とcropは関数内
+        # correctモードでanchorは不要なのでNoneを送る
+        target_image = correct_gap(
+                        None, self.target[i], self.size,
+                        self.correction, "correct", self.params[i], self.key)
+        target_image = cv2.resize(target_image, (self.size, self.size))
+        target_image = prep_chainertype(target_image - self.mean, self.size)
+
+        # targetで算出した補正値を使ってlabelも同様に補正
+        # correctモードでanchorは不要なのでNoneを送る
+        label_image = correct_gap(
+                        None, self.label[i], self.size,
+                        self.correction, "correct", self.params[i], self.key)
+
+        return anchor_image, target_image, label_image
