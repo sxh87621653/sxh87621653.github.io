@@ -35,7 +35,7 @@ msg = Message()
 
 
 ##########################################################
-# 画像前処理系
+# 画像前処理系 图像预处理
 ##########################################################
 
 class ResidualFunction:
@@ -59,8 +59,8 @@ class ResidualFunction:
                         - self.fitting_area)
 
 
-# 画像を取得し、cropできる最大正方形の辺長と
-# cropする際の正方形の左上の座標と右下の座標を返す
+# 画像を取得し、cropできる最大正方形の辺長と 最大正方形边长，可以获取图像并裁剪
+# cropする際の正方形の左上の座標と右下の座標を返す 返回正方形左上角和右下角的坐标
 def get_max_square(img):
     pts = []
     height = img.shape[0]
@@ -78,7 +78,7 @@ def get_max_square(img):
     return pts
 
 
-# 画像を指定の座標でcropして返す
+# 画像を指定の座標でcropして返す 在指定坐标处裁剪并返回图像
 def crop_center(img, pts):
 
     im_crop = img[pts[0][1]:pts[1][1], pts[0][0]:pts[1][0]]
@@ -96,7 +96,7 @@ def prep_chainertype(img, size):
     return img
 
 
-# フィッティングする二次曲線
+# フィッティングする二次曲線 要拟合的二次曲线
 def fitting_curve(alpha, delta1, delta2, r, u, y, x):
 
     ry, rx = r.shape
@@ -109,68 +109,68 @@ def fitting_curve(alpha, delta1, delta2, r, u, y, x):
     return y
 
 
-# スペクトルのピークを取得する
+# スペクトルのピークを取得する 获取频谱峰值
 def get_peak(anchor, target):
 
-    # 窓関数で周波サンプリング範囲を固定
+    # 窓関数で周波サンプリング範囲を固定 使用窗口函数固定频率采样范围
     hanning_y = np.hanning(anchor.shape[0])
     hanning_x = np.hanning(anchor.shape[1])
     hanning_window = hanning_y.reshape(hanning_y.shape[0], 1) * hanning_x
     anchor = anchor * hanning_window
     target = target * hanning_window
 
-    # 2次元FFT　FFTしたものをさらにFFT
-    # 2次元FFTすると直流成分が配列の左上に集まる
+    # 2次元FFT　FFTしたものをさらにFFT 二维FFT FFT的进一步FFT
+    # 2次元FFTすると直流成分が配列の左上に集まる 二维FFT时，直流成分聚集在排列左上方
     anchor_fft2 = np.fft.fft2(anchor)
     target_fft2 = np.fft.fft2(target)
-    # 複素数部分の符号を反転する
-    target_fft2_i = np.conj(target_fft2)
-    # 両者の積をとる
+    # 複素数部分の符号を反転する 反转复数部分的符号
+    target_fft2_i = np.conj(tar get_fft2)
+    # 両者の積をとる  取两者的乘积
     product = anchor_fft2 * target_fft2_i / np.abs(anchor_fft2 * target_fft2_i)
 
-    # ifftで逆フーリエ変換
-    # realで結果の実数部だけを取る
-    # 左上に集まった直流成分をfftshiftで中心に移動させる
+    # ifftで逆フーリエ変換 逆变换与ifft
+    # realで結果の実数部だけを取る 在真实中仅取结果的实部
+    # 左上に集まった直流成分をfftshiftで中心に移動させる 用fftshift将聚集在左上角直流成分移动到中心
     peak = np.fft.fftshift(np.real(np.fft.ifft2(product)))
 
     return peak
 
 
-# 位相限定相関法
+# 位相限定相関法 相位限制相关方法
 def exec_poc(anchor, target):
 
-    # 画像中心点を取得
+    # 画像中心点を取得 获取图像中心点
     center = [np.floor(anchor.shape[0]/2), np.floor(anchor.shape[1]/2)]
-    # 画像を四分割した際の中心点を取得
+    # 画像を四分割した際の中心点を取得 获取四分割图像时的中心点
     quarter = [center[0]/2, center[1]/2]
 
-    # スペクトルのピークを算出
+    # スペクトルのピークを算出 计算频谱峰值
     peak_info = get_peak(anchor, target)
-    # ピーク値のある座標を取得
+    # ピーク値のある座標を取得 获取具有峰值的坐标
     # argmaxは一次元時の座標を返すので二次元に変換
     peak_idx_linear = np.argmax(peak_info)
     peak_pts = (int(peak_idx_linear / anchor.shape[1]),
                 int(peak_idx_linear % anchor.shape[1]))
 
-    # ピーク周辺から取得する範囲を設定
+    # ピーク周辺から取得する範囲を設定 设置从峰值周围获取的范围
     fitting_shape = (9, 9)
     mf = [np.floor(fitting_shape[0]/2), np.floor(fitting_shape[1]/2)]
-    # fitting_shape分だけピークの周辺を取得する
+    # fitting_shape分だけピークの周辺を取得する 获得fitting_shape分钟的峰值周围
     fitting_area = peak_info[peak_pts[0] - int(mf[0]):
                              peak_pts[0] + int(mf[0]) + 1,
                              peak_pts[1] - int(mf[1]):
                              peak_pts[1] + int(mf[1]) + 1]
-    # 画像の中心とピーク点の差を算出
+    # 画像の中心とピーク点の差を算出 计算图像中心和峰值点之间的差异
     p0 = [0.5, -(peak_pts[0] - center[0]) - 0.02,
           -(peak_pts[1] - center[1]) - 0.02]
-    # 格子作成
+    # 格子作成 网格创建
     y, x = np.mgrid[-mf[0]:mf[0] + 1, -mf[1]:mf[1] + 1]
-    # 画像中心とピーク点の差分だけ格子を調整
+    # 画像中心とピーク点の差分だけ格子を調整 仅调整图像中心和峰值点之间的差值
     y = y + peak_pts[0] - center[0]
     x = x + peak_pts[1] - center[1]
 
-    # 最小二乗法用mapのラムダを定義
-    # 多分ズレ検知したやつを一次元配列化
+    # 最小二乗法用mapのラムダを定義 定义最小二乘映射的 lambda
+    # 多分ズレ検知したやつを一次元配列化  也许一维排列检测到偏差的那个
     res_func = ResidualFunction(peak_info, quarter, y, x, fitting_area)
     plsq = leastsq(res_func, p0)
 
@@ -180,33 +180,33 @@ def exec_poc(anchor, target):
     return gap1, gap2
 
 
-# ズレ補正
-# confは外側で[回転、拡縮、ズレ]のリストにして受け取る
-# mode:bothなら補正値算出+補正を実行、補正したtarget画像を返す
-# mode:correctなら補正のみ実行、補正したtarget画像を返す
-# mode:calcなら補正値算出のみ実行、補正に必要なパラメータの辞書を返す
+# ズレ補正 偏移校正
+# confは外側で[回転、拡縮、ズレ]のリストにして受け取る  conf 在外部接收 [旋转、缩放、偏移] 列表
+# mode:bothなら補正値算出+補正を実行、補正したtarget画像を返す 模式：both执行校正值计算+校正，返回校正后目标图像
+# mode:correctなら補正のみ実行、補正したtarget画像を返す 模式：correct仅执行校正，返回校正后的目标图像
+# mode:calcなら補正値算出のみ実行、補正に必要なパラメータの辞書を返す mode：calc仅执行修正值计算，返回修正所需参数的辞典
 def correct_gap(anchor, target_path, size, conf, mode="both", param=None, key=None):
 
-    # confが全てFalse(何もしない指定)の場合は補正なしで返す
+    # confが全てFalse(何もしない指定)の場合は補正なしで返す 如果 # conf 全部为 False（指定不执行任何），则返回而不进行补偿
     if conf[0] is False and conf[1] is False and conf[2] is False:
-        # calcモード時は空のparamを作成して返す
+        # calcモード時は空のparamを作成して返す 在强制模式期间创建并返回空参数
         if mode == "calc":
             param = dict()
             return param
-        # bothモード、correctモード時はcropして返す
+        # bothモード、correctモード時はcropして返す 在计数模式、循环模式时，通过裁剪返回
         else:
             target = cv2_imread(target_path, key=key)
             pts = get_max_square(target)
             target = crop_center(target, pts)
             return target
 
-    # calc、bothモード時は補正値算出を実行
+    # calc、bothモード時は補正値算出を実行 calc，在both模式时执行修正值计算
     if mode == "calc" or mode == "both":
         # targetはパスとして受け取っているのでグレスケで読込
         # anchorは全て同じグレスケアンカーを使用するので外で読込
         target = cv2_imread(target_path, flags=0, key=key)
 
-        # 係数算出の為に画像を正方形に
+        # 係数算出の為に画像を正方形に 为了计算系数，将图像设置为正方形
         pts = get_max_square(anchor)
         anchor = crop_center(anchor, pts)
         anchor = cv2.resize(anchor, (size, size))
@@ -214,7 +214,7 @@ def correct_gap(anchor, target_path, size, conf, mode="both", param=None, key=No
         target = crop_center(target, pts)
         target = cv2.resize(target, (size, size))
 
-        # フーリエ変換
+        # フーリエ変換 傅立叶变换
         anchor_f = np.fft.fft2(anchor)
         anchor_fshift = np.fft.fftshift(anchor_f)
         anchor_mag_spectrum = 20 * np.log(np.abs(anchor_fshift))
@@ -222,8 +222,8 @@ def correct_gap(anchor, target_path, size, conf, mode="both", param=None, key=No
         target_fshift = np.fft.fftshift(target_f)
         target_mag_spectrum = 20 * np.log(np.abs(target_fshift))
 
-        # log_Polar変換
-        # スケーリング係数を算出
+        # log_Polar変換 log_Polar转换
+        # スケーリング係数を算出 计算缩放系数
         sides = anchor_mag_spectrum.shape[0]
         scaling_coefficient = sides / math.log(sides)
 
@@ -236,93 +236,93 @@ def correct_gap(anchor, target_path, size, conf, mode="both", param=None, key=No
                                  scaling_coefficient,
                                  cv2.WARP_FILL_OUTLIERS+cv2.INTER_LINEAR)
 
-        # 位相限定相関法で回転角(中心角)とサイズ比を算出
+        # 位相限定相関法で回転角(中心角)とサイズ比を算出 使用相位限制相关方法计算旋转角（中心角）和尺寸比
         rotate_info = exec_poc(anchor_lp, target_lp)
         angle = -1 * rotate_info[0] / sides * 360
         scale = 1.0 - rotate_info[1] / 100
 
-        # アフィン変換するための回転中心点座標を取得
+        # アフィン変換するための回転中心点座標を取得 获取用于仿射变换的旋转中心点坐标
         center = tuple(np.array(anchor.shape) / 2)
-        # 回転角、サイズ比、中心点を元にしてアフィン変換の為の回転変換行列を取得
+        # 回転角、サイズ比、中心点を元にしてアフィン変換の為の回転変換行列を取得  根据旋转角度、尺寸比和中心点获取仿射变换的旋转变换矩阵
         rot_matrix = cv2.getRotationMatrix2D(center, -1 * angle,
                                              1.0 + (1.0 - scale))
-        # 取得した行列を使ってズレてる画像をアフィン変換、平行移動ズレのみになったものを作成
+        # 取得した行列を使ってズレてる画像をアフィン変換、平行移動ズレのみになったものを作成 使用获取的矩阵对偏移图像进行仿射转换，并创建仅平移偏差的图像
         corrected_target = cv2.warpAffine(target, rot_matrix,
                                           (target.shape[1], target.shape[0]),
                                           flags=cv2.INTER_LANCZOS4)
 
-        # 回転とかを除いたものに対してｘｙ方向のズレ算出
+        # 回転とかを除いたものに対してｘｙ方向のズレ算出 相对于除去旋转后计算xy方向偏差
         gap = exec_poc(anchor, corrected_target)
 
-        # calcモード時は算出したangle, scale, gap、centerを辞書にして返して終了
+        # calcモード時は算出したangle, scale, gap、centerを辞書にして返して終了 在强制模式中，计算的甘乐、缩放、折叠和中心在字典中返回并退出
         if mode == "calc":
             param = dict(angle=angle, scale=scale, gap_x=gap[1],
                          gap_y=gap[0], center=center)
             return param
 
-    # correct、bothモード時は補正処理を実行
+    # correct、bothモード時は補正処理を実行 在错误、both模式下执行校正处理
     if mode == "correct" or mode == "both":
-        # 返却用に画像をカラーで読込
+        # 返却用に画像をカラーで読込 以彩色读取图像以供返回
         target = cv2_imread(target_path, key=key)
         pts = get_max_square(target)
         target = crop_center(target, pts)
         target = cv2.resize(target, (size, size))
 
-        # 各変数代入
-        # bothモード時は算出したgapから代入
+        # 各変数代入 每个变量赋值
+        # bothモード時は算出したgapから代入 在both模式时，从计算出的gap进行代入
         if mode == "both":
             gap_x = gap[1]
             gap_y = gap[0]
-        # correctモード時は引数のparamから代入
+        # correctモード時は引数のparamから代入 在错误模式下，从参数参数参数赋值
         elif mode == "correct":
             angle = param["angle"]
             scale = param["scale"]
             gap_x = param["gap_x"]
             gap_y = param["gap_y"]
             center = param["center"]
-
-        # confの指定に合わせてdst_target作成
+ 
+        # confの指定に合わせてdst_target作成 根据 conf 规范创建dst_target
         rot_flg = 0
         trans_flg = 0
-        # 「回転のみ」の場合と「回転+ズレ」の場合
+        # 「回転のみ」の場合と「回転+ズレ」の場合 仅旋转和旋转 + 偏移
         if conf[0] is True and conf[1] is False:
             dst_rot = cv2.getRotationMatrix2D(center, -1 * angle, 1.0)
             rot_flg = 1
-            # ズレ補正の指定があったら以下も実行
+            # ズレ補正の指定があったら以下も実行 如果指定了偏差校正，则执行以下操作
             if conf[2] is True:
                 trans_matrix = np.float32([[1, 0, -1 * gap_x],
                                            [0, 1, -1 * gap_y]])
                 trans_flg = 1
 
-        # 「拡縮のみ」の場合と「拡縮+ズレ」の場合
+        # 「拡縮のみ」の場合と「拡縮+ズレ」の場合 “仅扩缩”和“扩缩+偏移”时
         elif conf[0] is False and conf[1] is True:
             dst_rot = cv2.getRotationMatrix2D(center, 0, 1.0 + (1.0 - scale))
             rot_flg = 1
-            # ズレ補正の指定があったら以下も実行
+            # ズレ補正の指定があったら以下も実行 如果指定了偏差校正，则执行以下操作
             if conf[2] is True:
                 trans_matrix = np.float32([[1, 0, -1 * gap_x],
                                            [0, 1, -1 * gap_y]])
                 trans_flg = 1
 
-        # 「回転+拡縮」の場合と「回転+拡縮+ズレ」の場合
+        # 「回転+拡縮」の場合と「回転+拡縮+ズレ」の場合 “旋转+扩缩”时和“旋转+扩缩+偏移”时
         elif conf[0] is True and conf[1] is True:
             dst_rot = cv2.getRotationMatrix2D(center, -1 * angle,
                                               1.0 + (1.0 - scale))
             rot_flg = 1
-            # ズレ補正の指定があったら以下も実行
+            # ズレ補正の指定があったら以下も実行 如果指定了偏差校正，则执行以下操作
             if conf[2] is True:
                 trans_matrix = np.float32([[1, 0, -1 * gap_x],
                                            [0, 1, -1 * gap_y]])
                 trans_flg = 1
 
-        # 「ズレのみ」の場合
+        # 「ズレのみ」の場合 “仅偏差”时
         elif conf[0] is False and conf[1] is False and conf[2] is True:
             trans_matrix = np.float32([[1, 0, -1 * gap_x],
                                        [0, 1, -1 * gap_y]])
             trans_flg = 1
 
-        # rot_flgがゼロのままでなければ回転、拡縮補正実施
-        # trans_flgがゼロのままでなければズレ補正実施
+        # rot_flgがゼロのままでなければ回転、拡縮補正実施 如果rot_flg不保持为零，则实施旋转、扩缩修正
+        # trans_flgがゼロのままでなければズレ補正実施 如果trans_flg不保持为零，则执行偏差校正
         dst_target = target
         if rot_flg != 0:
             dst_target = cv2.warpAffine(dst_target, dst_rot,
@@ -336,17 +336,17 @@ def correct_gap(anchor, target_path, size, conf, mode="both", param=None, key=No
 
 
 #####################################################
-# 結果算出系
+# 結果算出系 结果计算
 #####################################################
-# 受け取った特徴間の距離を算出
+# 受け取った特徴間の距離を算出 计算接收的特征之间的距离
 def calc_dist(anchor, target, pooling=True):
 
-    # inの形状を取得
+    # inの形状を取得 获取 in 的形状
     b_size, channels, rows, cols = anchor.data.shape
     f_sum = F.sum(F.square(anchor - target), axis=1)
-    # inの形状に合わせる
+    # inの形状に合わせる 匹配 in 的形状
     dist = F.reshape(f_sum, (b_size, 1, rows, cols))
-    # 学習時のみpooling=True
+    # 学習時のみpooling=True 仅在学习时发出=True
     if pooling:
         dist = F.reshape(F.max_pooling_2d(dist, ksize=(rows, cols)), (b_size,))
 
@@ -368,30 +368,30 @@ def pred_scores(anchor, target, model):
 
 def calc_auc(test_score_list=None, label_images=None, times=10):
 
-    # 閾値変更回数timesはデフォルト10
-    # score_listからスコアデータの一辺長を取得
+    # 閾値変更回数timesはデフォルト10 阈值变更次数times默认为10
+    # score_listからスコアデータの一辺長を取得 从score_list获取分数数据的一侧长度
     data_sides = int(math.sqrt(len(test_score_list[0])))
 
-    # 画像名格納用配列
+    # 画像名格納用配列 图像名存储用排列
     idx_list = []
     for i_n in range(len(label_images)):
         # target_imageの枚数分、idx_listに番号を追加
         idx_list.append(i_n)
 
-    # スコア格納用配列初期化
+    # スコア格納用配列初期化 用于存储分数的数组初始化
     score_list = list(np.zeros((len(idx_list), data_sides)))
 
-    # 受け取ったtest_score_listを前から順に[画像数(スコア数)][行数]の形にする
+    # 受け取ったtest_score_listを前から順に[画像数(スコア数)][行数]の形にする 将接收到的test_score_list从前依次为[图像数（得分）][行数]的形状
     row_cnt = 0
     for idx in idx_list:
         score_list[idx] = list(score_list[idx])
-        # スコアデータを各行毎の形に分解
+        # スコアデータを各行毎の形に分解 将分数数据分解为每行的形状
         while row_cnt < data_sides:
             score_list[idx][row_cnt]\
                 = test_score_list[idx][row_cnt*data_sides:
                                        (row_cnt+1)*data_sides]
             row_cnt += 1
-        # カウンタ初期化
+        # カウンタ初期化 计数器初始化
         row_cnt = 0
 
     total_tpr_list, total_fpr_list, _ = calc_auc_precore(idx_list,
@@ -400,7 +400,7 @@ def calc_auc(test_score_list=None, label_images=None, times=10):
                                                          data_sides,
                                                          times)
 
-    # 全体ROC, AUCの算出、描画
+    # 全体ROC, AUCの算出、描画  整个 ROC，AUC 计算和绘制
     total_roc_auc = auc(np.array(total_fpr_list), np.array(total_tpr_list))
 
     res_dict = {"auc": {total_roc_auc}}
@@ -408,13 +408,13 @@ def calc_auc(test_score_list=None, label_images=None, times=10):
     return res_dict
 
 
-# 実際のcalc_auc処理
+# 実際のcalc_auc処理  实际calc_auc处理
 def calc_auc_precore(idx_list, score_list, label_images, data_sides, times):
 
     #####################################################
-    # リスト内スコア調査
+    # リスト内スコア調査 列表内分数调查
     #####################################################
-    # リスト内の全スコアの最高値を取得
+    # リスト内の全スコアの最高値を取得 获取列表中所有分数的最高值
     score_max = 0
     for i_n in range(len(score_list)):
         for r_n in range(len(score_list[0])):
@@ -423,16 +423,16 @@ def calc_auc_precore(idx_list, score_list, label_images, data_sides, times):
                 if score > score_max:
                     score_max = score
 
-    # ROC用閾値を設定
+    # ROC用閾値を設定 设置 ROC 阈值
     thres_base = score_max / times
 
     #####################################################
-    # 画像毎の処理
+    # 画像毎の処理 每个图像处理
     #####################################################
 
     img_num = 0
     individual_dict_list = []
-    # 全体精度評価用リスト初期化
+    # 全体精度評価用リスト初期化 用于整体精度评估的列表初始化
     total_dict = dict(total_tp=[0 for x in range(times+1)],
                       total_fn=[0 for x in range(times+1)],
                       total_fp=[0 for x in range(times+1)],
@@ -443,27 +443,27 @@ def calc_auc_precore(idx_list, score_list, label_images, data_sides, times):
                       total_rec_p=0,
                       total_rec_n=0)
 
-    # マスク画像とscore_listを順番に比較
+    # マスク画像とscore_listを順番に比較 按顺序比较蒙版图像和score_list
     for idx in idx_list:
 
         individual_dict, total_dict = calc_auc_core(idx, score_list[img_num],
                                                     label_images, data_sides,
                                                     thres_base, times,
                                                     total_dict)
-        # idx情報もリストのリストでセットにしておく
+        # idx情報もリストのリストでセットにしておく 将 idx 信息放在列表列表中
         individual_dict_list.append([[idx], [individual_dict]])
 
-        # 全体の平均acc, prc, rec用変数に加算
+        # 全体の平均acc, prc, rec用変数に加算 添加到总平均 acc、prc 和 rec 变量
         total_dict["total_acc"] += individual_dict["acc"]
         total_dict["total_prc_p"] += individual_dict["prc_p"]
         total_dict["total_prc_n"] += individual_dict["prc_n"]
         total_dict["total_rec_p"] += individual_dict["rec_p"]
         total_dict["total_rec_n"] += individual_dict["rec_n"]
 
-        # img_numを更新
+        # img_numを更新 更新img_num
         img_num += 1
 
-    # 全体の真陽性率、偽陽性率算出
+    # 全体の真陽性率、偽陽性率算出 计算总真实阳性率和误报率
     total_tpr_list = []
     total_fpr_list = []
     for time in range(times+1):
@@ -488,7 +488,7 @@ def calc_auc_precore(idx_list, score_list, label_images, data_sides, times):
 def calc_auc_core(idx, scores, label_images, data_sides,
                   thres_base, times, total_dict):
 
-    # 各変数を初期化
+    # 各変数を初期化 初始化每个变量
     result_dict = dict(fpr_list=[],
                        tpr_list=[],
                        fnr_list=[],
@@ -499,22 +499,22 @@ def calc_auc_core(idx, scores, label_images, data_sides,
                        rec_p=0,
                        rec_n=0)
 
-    # 共通化
-    # idxには添え字が入っているためidx番目のmaskを読込
-    # np.ndarrayに変換しないとresizeが通らない
+    # 共通化 通用化
+    # idxには添え字が入っているためidx番目のmaskを読込 由于 idx 包含下标，因此读取第一个掩码
+    # np.ndarrayに変換しないとresizeが通らない 如果不将其转换为 np.ndarray，则重新大小不会通过。
     mask = cuda.to_cpu(label_images[int(idx)])
 
-    # mask画像をcrop
+    # mask画像をcrop 裁剪掩码图像
     m_pts = get_max_square(mask)
     mask = crop_center(mask, m_pts)
-    # mask画像のサイズをscore_listに合わせる
+    # mask画像のサイズをscore_listに合わせる 使蒙版图像适合score_list
     mask = cv2.resize(mask, (data_sides, data_sides))
 
     #####################################################
-    # tp, fp, fn, tnカウント処理
+    # tp, fp, fn, tnカウント処理 tp， fp， fn， tn 计数处理
     #####################################################
-    # mask画像内の白以外の画素数をカウント
-    # mask画像の白でない画素数の二倍、score_listを調査する。
+    # mask画像内の白以外の画素数をカウント 对掩码图像中非白色像素数进行计数
+    # mask画像の白でない画素数の二倍、score_listを調査する。 调查掩码图像中非白色像素数的两倍score_list。
     n_pix = 0
     for row in range(data_sides):
         for col in range(data_sides):
@@ -523,20 +523,20 @@ def calc_auc_core(idx, scores, label_images, data_sides,
                     or mask[row][col][2] != 255:
                         n_pix += 1
 
-    # mask画像の半分以上が異常箇所だった場合は数を調整
+    # mask画像の半分以上が異常箇所だった場合は数を調整  如果超过一半的掩码图像是异常位置，请调整数字
     if n_pix > int(data_sides * data_sides / 2):
         n_pix = int(data_sides * data_sides / 2)
 
-    # 位置を追加して二次元配列を一次元に変換
+    # 位置を追加して二次元配列を一次元に変換 添加位置以将二维数组转换为一维
     score_line = []
     for row in range(data_sides):
         for col in range(data_sides):
             score_line.append([(row, col), float(scores[row][col])])
 
-    # スコアの降順に並べ替える
+    # スコアの降順に並べ替える 按分数降序排序
     score_line = (sorted(score_line, key=itemgetter(1))[::-1])
 
-    # 前からn_pix*2だけ抽出
+    # 前からn_pix*2だけ抽出 仅从前面提取n_pix*2
     score_line = (score_line[:n_pix*2])
 
     for time in range(times+1):
@@ -544,16 +544,16 @@ def calc_auc_core(idx, scores, label_images, data_sides,
         fn = 0  # 偽陰
         fp = 0  # 偽陽
         tn = 0  # 真陰
-        # 各回の閾値を設定
+        # 各回の閾値を設定  设置每个时间的阈值
         threshold = thres_base * time
         for pts in range(len(score_line)):
             row, col = score_line[pts][0]
-            # maskの該当画素が白かそれ以外かで判定
-            # 白(正常想定画素)の場合
+            # maskの該当画素が白かそれ以外かで判定 根据掩码相应像素是白色还是其他像素来判定
+            # 白(正常想定画素)の場合 白色（正常假定像素）时
             if mask[row][col][0] == 255 \
                 and mask[row][col][1] == 255 \
                     and mask[row][col][2] == 255:
-                    # scoresの該当画素がthreshold以下なら正常判定
+                    # scoresの該当画素がthreshold以下なら正常判定 如果阈值的相应像素小于或等于阈值，则正常确定
                     if float(scores[row][col]) <= threshold:
                         # 真：正常、推：正常
                         tp += 1  # 個別tp
@@ -562,9 +562,9 @@ def calc_auc_core(idx, scores, label_images, data_sides,
                         # 真：正常、推：異常
                         fn += 1  # 個別fn
                         total_dict["total_fn"][time] += 1  # 全体fn
-            # maskが白以外(異常想定画素)の場合
+            # maskが白以外(異常想定画素)の場合  掩码为白色以外（异常假定像素）时
             else:
-                # scoresの該当画素がthresholdより大きければ異常判定
+                # scoresの該当画素がthresholdより大きければ異常判定 如果阈值相应像素大于阈值，则异常判定
                 if float(scores[row][col]) > threshold:
                     # 真：異常、推：異常
                     tn += 1  # 個別tn
@@ -602,7 +602,7 @@ def calc_auc_core(idx, scores, label_images, data_sides,
             fnr = fn / (fn + tp)
         result_dict["fnr_list"].append(fnr)
 
-        # Accuracy, Precision, Recallについては最高値のみ保存
+        # Accuracy, Precision, Recallについては最高値のみ保存 只保存最高值
         # 正解率(Accuracy)算出
         if (tp + fp + fn + tn) != 0:
             tmp_acc = (tp + tn) / (tp + fp + fn + tn)
@@ -611,7 +611,7 @@ def calc_auc_core(idx, scores, label_images, data_sides,
         if tmp_acc > result_dict["acc"]:
             result_dict["acc"] = tmp_acc
 
-        # 正常画素についての適合率(Precision)算出
+        # 正常画素についての適合率(Precision)算出 计算正常像素的拟合率
         if (tp + fp) != 0:
             tmp_prc_p = tp / (tp + fp)
         else:
@@ -619,7 +619,7 @@ def calc_auc_core(idx, scores, label_images, data_sides,
         if tmp_prc_p > result_dict["prc_p"]:
             result_dict["prc_p"] = tmp_prc_p
 
-        # 異常画素についての適合率(Precision)算出
+        # 異常画素についての適合率(Precision)算出 异常像素的准确率计算
         if (tn + fn) != 0:
             tmp_prc_n = tn / (tn + fn)
         else:
@@ -627,7 +627,7 @@ def calc_auc_core(idx, scores, label_images, data_sides,
         if tmp_prc_n > result_dict["prc_n"]:
             result_dict["prc_n"] = tmp_prc_n
 
-        # 正常画素についての再現率(Recall)算出
+        # 正常画素についての再現率(Recall)算出 计算正常像素的再现率
         if (tp + fn) != 0:
             tmp_rec_p = tp / (tp + fn)
         else:
@@ -635,8 +635,8 @@ def calc_auc_core(idx, scores, label_images, data_sides,
         if tmp_rec_p > result_dict["rec_p"]:
             result_dict["rec_p"] = tmp_rec_p
 
-        # 異常画素についての再現率(Recall)算出
-        if (tn + fp) != 0:
+        # 異常画素についての再現率(Recall)算出 异常像素的再现率计算
+        if (tn + fp) != 0: 
             tmp_rec_n = tn / (tn + fp)
         else:
             tmp_rec_n = 0
@@ -649,25 +649,25 @@ def calc_auc_core(idx, scores, label_images, data_sides,
 def cv2_imread(filename, flags=cv2.IMREAD_COLOR, key=None):
 
     if key is None:
-        # 引数keyなし：cv2.imreadで読む
+        # 引数keyなし：cv2.imreadで読む 无键参数：在 cv2.imread 中读取
         return cv2.imread(filename, flags=flags)
     else:
 
-        # 引数keyあり：画像のbytesオブジェクト取得
+        # 引数keyあり：画像のbytesオブジェクト取得 带键的参数：获取图像的字节对象
         with Snn_Open(filename, 'rb', key=key) as f:
             data = f.read()
 
         with tempfile.NamedTemporaryFile() as f:
-            # bytesオブジェクトから一時ファイル生成
+            # bytesオブジェクトから一時ファイル生成 从字节对象生成临时文件
             f.write(data)
             f.flush()
-            # cv2.imreadで読む
+            # cv2.imreadで読む 在 cv2.imread 中阅读
             opencv_img = cv2.imread(f.name, flags=flags)
 
         return opencv_img
 
 ##########################################################
-# 外観検査独自Evaluatorクラス
+# 外観検査独自Evaluatorクラス 外观检查独自Evaluator类
 ##########################################################
 class VisualInspectionEvaluator(extensions.Evaluator):
 
@@ -683,7 +683,7 @@ class VisualInspectionEvaluator(extensions.Evaluator):
         super(VisualInspectionEvaluator, self).__init__(
             iterator, target, converter, device, eval_hook, eval_func)
 
-    # 評価
+    # 評価 评级
     def evaluate(self):
 
         iterator = self._iterators['main']
@@ -706,7 +706,7 @@ class VisualInspectionEvaluator(extensions.Evaluator):
                 in_arrays = self.converter(batch, self.device)
                 with function.no_backprop_mode():
 
-                    # 以下、ミニバッチ分のデータセット
+                    # 以下、ミニバッチ分のデータセット 以下称为小型批处理数据集
                     anchor_image = in_arrays[0]
                     target_image = in_arrays[1]
                     label_image = in_arrays[2]
@@ -731,7 +731,7 @@ class VisualInspectionEvaluator(extensions.Evaluator):
                     summary.add({VisualInspectionEvaluator.default_name
                                  + '/main/auc': float(auc_mean_batch)})
 
-        # 平均値を最終結果として返却
+        # 平均値を最終結果として返却 将平均值作为最终结果返回
         return summary.compute_mean()
 
 
