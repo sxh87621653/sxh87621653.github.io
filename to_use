@@ -13,11 +13,11 @@ import tempfile
 import csv
 import math
 from tqdm import tqdm
-from sklearn.metrics import auc
-from operator import itemgetter
-from scipy.optimize import leastsq
+from sklearn.metrics import auc #性能判断
+from operator import itemgetter #将多维数组转一维
+from scipy.optimize import leastsq #判断误差
 
-import chainer
+import chainer #基于GPU生成可视化图表
 from chainer import function
 from chainer import reporter as reporter_module
 from chainer.training import extensions
